@@ -1,0 +1,34 @@
+{
+  "name": "SENTRA RT 03",
+  "short_name": "RT 03",
+  "description": "Sistem informasi Rukun Tetangga 03 - Wadah Transparan, Warga Sejahtera",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#0f766e",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-icon",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["utilities", "productivity", "government"],
+  "lang": "id",
+  "dir": "ltr"
+}
