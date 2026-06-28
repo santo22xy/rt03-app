@@ -12,13 +12,15 @@ import {
 } from '@/components/ui/dialog'
 import {
   Check, ChevronDown, ChevronUp, Search, MessageCircle,
-  Save, Users, Shield, Copy, ArrowLeftRight, Lock, Loader2, Crown
+  Users, Shield, Copy, ArrowLeftRight, Lock, Loader2, Crown,
+  CheckCircle2, XCircle, AlertTriangle, ShieldCheck,
 } from 'lucide-react'
 import { formatRupiah, formatTanggal } from '@/lib/format'
 import { toast } from 'sonner'
 import {
   updateJimpitanDetail, bulkSetBelumBayar, toggleKehadiran,
-  submitSesi, swapPenjaga, swapAnggota
+  submitSesi, swapPenjaga, swapAnggota,
+  accSesi, rejectSesi,
 } from '../../jimpitan-actions'
 
 type Profile = {
@@ -71,6 +73,10 @@ export function JimpitanForm({
   anggotaKelompok,
   keadaan: initialKeadaan,
   catatan: initialCatatan,
+  approvedByName,
+  approvedAt,
+  currentUserRole,
+  currentUserName,
 }: {
   sesiId: string
   tanggal: string
@@ -83,6 +89,10 @@ export function JimpitanForm({
   anggotaKelompok: AnggotaKelompok[]
   keadaan: string
   catatan: string | null
+  approvedByName?: string | null
+  approvedAt?: string | null
+  currentUserRole: string
+  currentUserName?: string | null
 }) {
   const isLocked = status === 'APPROVED' || status === 'SUBMITTED'
   const [isPending, startTransition] = useTransition()
@@ -149,24 +159,31 @@ export function JimpitanForm({
     setExpandedBlok(s)
   }
 
-  function updateDetail(profileId: string, nominal: number, isBayar: boolean) {
-    setDetails((prev) => ({ ...prev, [profileId]: { nominal, is_bayar: isBayar } }))
-  }
-
-  function saveDetail(profileId: string) {
-    const d = details[profileId]
-    if (!d) return
+  /**
+   * Auto-save handler: update local state + langsung persist ke DB.
+   * Dipakai oleh checkbox, preset nominal, dan input manual supaya setiap
+   * interaksi langsung tersimpan — TIDAK ada "data hilang" kalau user
+   * langsung Submit tanpa klik tombol Simpan.
+   */
+  function autoSaveDetail(profileId: string, nominal: number, isBayar: boolean) {
     const profile = profiles.find((p) => p.id === profileId)
     const profileName = profile?.nama_kk ?? 'Warga'
+    // Optimistic local update
+    setDetails((prev) => ({ ...prev, [profileId]: { nominal, is_bayar: isBayar } }))
+    // Persist
     startTransition(async () => {
       const fd = new FormData()
       fd.append('sesiId', sesiId)
       fd.append('profileId', profileId)
-      fd.append('nominal', String(d.nominal))
-      fd.append('isBayar', String(d.is_bayar))
+      fd.append('nominal', String(nominal))
+      fd.append('isBayar', String(isBayar))
       const res = await updateJimpitanDetail(fd)
-      if (res?.error) toast.error(res.error)
-      else if (res?.success) toast.success(`${profileName} tersimpan (${formatRupiah(d.nominal)})`)
+      if (res?.error) {
+        toast.error(`${profileName} gagal simpan: ${res.error}`)
+      } else if (res?.success) {
+        // Hanya toast kalau bayar=true, supaya tidak spam toast
+        if (isBayar) toast.success(`${profileName} · ${formatRupiah(nominal)}`)
+      }
     })
   }
 
@@ -271,6 +288,12 @@ export function JimpitanForm({
   }
 
   const [submitOpen, setSubmitOpen] = useState(false)
+  const [accOpen, setAccOpen] = useState(false)
+  const [rejectOpen, setRejectOpen] = useState(false)
+  const [rejectAlasan, setRejectAlasan] = useState('')
+
+  // Hanya bendahara/ketua/superadmin yang boleh ACC/REJECT
+  const canValidate = ['BENDAHARA', 'KETUA_RT', 'SUPERADMIN'].includes(currentUserRole)
 
   function doSubmit() {
     setSubmitOpen(false)
@@ -279,6 +302,7 @@ export function JimpitanForm({
       fd.append('sesiId', sesiId)
       fd.append('keadaan', keadaan)
       fd.append('catatan', catatan)
+      fd.append('details', JSON.stringify(details))
       const res = await submitSesi(fd)
       if (res?.error) toast.error(res.error)
       else toast.success('Sesi berhasil disubmit. Menunggu ACC Bendahara.')
@@ -292,6 +316,30 @@ export function JimpitanForm({
       return
     }
     setSubmitOpen(true)
+  }
+
+  function doAcc() {
+    setAccOpen(false)
+    startTransition(async () => {
+      const res = await accSesi(sesiId)
+      if (res?.error) toast.error(res.error)
+      else toast.success('✅ Sesi berhasil di-ACC. Total sudah masuk ke kas RT.')
+    })
+  }
+
+  function doReject() {
+    if (!rejectAlasan.trim()) {
+      toast.error('Alasan penolakan wajib diisi')
+      return
+    }
+    setRejectOpen(false)
+    const alasan = rejectAlasan
+    setRejectAlasan('')
+    startTransition(async () => {
+      const res = await rejectSesi(sesiId, alasan)
+      if (res?.error) toast.error(res.error)
+      else toast.success('Sesi dikembalikan ke AKTIF untuk direvisi oleh petugas')
+    })
   }
 
   // Generate chat format
@@ -704,34 +752,48 @@ export function JimpitanForm({
                 <div className="border-t border-slate-200/60 divide-y divide-slate-100">
                   {items.map((p) => {
                     const d = details[p.id] || { nominal: 0, is_bayar: false }
-                    // Default nominal sesuai kategori_tarif (kalau warga JANDA = 10000, NORMAL = 15000)
-                    const defaultNominal = p.kategori_tarif === 'JANDA' ? 10000 : 15000
+                    // Default nominal sesuai kategori_tarif (kalau warga KHUSUS = 10000, NORMAL = 15000)
+                    const defaultNominal = p.kategori_tarif === 'KHUSUS' ? 10000 : 15000
+                    // Cek apakah baris ini sudah persist di DB (saved = ada di existingDetails)
+                    const isSaved = existingDetails.some((ed) => ed.profile_id === p.id)
+                    const isDirty = !isSaved || (() => {
+                      const ed = existingDetails.find((x) => x.profile_id === p.id)
+                      return ed && (ed.is_bayar !== d.is_bayar || Number(ed.nominal) !== d.nominal)
+                    })()
                     return (
                       <div key={p.id} className="p-3 space-y-2">
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => !isLocked && updateDetail(p.id, d.is_bayar ? d.nominal : defaultNominal, !d.is_bayar)}
+                            onClick={() => !isLocked && autoSaveDetail(
+                              p.id,
+                              d.is_bayar ? 0 : defaultNominal,
+                              !d.is_bayar
+                            )}
                             disabled={isLocked}
                             className={`shrink-0 w-7 h-7 rounded-md border-2 flex items-center justify-center transition-all ${
                               d.is_bayar
                                 ? 'bg-emerald-500 border-emerald-500'
                                 : 'border-slate-300 hover:border-emerald-400'
                             } ${isLocked ? 'opacity-50' : ''}`}
-                            title={d.is_bayar ? 'Batalkan bayar' : 'Tandai bayar'}
+                            title={d.is_bayar ? 'Batalkan bayar (auto-save)' : 'Tandai bayar (auto-save)'}
                           >
                             {d.is_bayar && <Check className="w-4 h-4 text-white" />}
                           </button>
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-semibold truncate">{p.nama_kk}</p>
                             <p className="text-[10px] text-muted-foreground">
-                              {p.login_id} · {p.kategori_tarif === 'JANDA' ? 'Rp 10rb' : 'Rp 15rb'}
+                              {p.login_id} · {p.kategori_tarif === 'KHUSUS' ? 'Rp 10rb' : 'Rp 15rb'}
                             </p>
                           </div>
-                          {d.is_bayar && (
+                          {d.is_bayar ? (
                             <Badge className="bg-emerald-100 text-emerald-700 text-[10px] hover:bg-emerald-100">
                               {formatRupiah(d.nominal)}
                             </Badge>
-                          )}
+                          ) : isSaved ? (
+                            <Badge variant="outline" className="text-[9px] text-slate-500 border-slate-200">
+                              belum
+                            </Badge>
+                          ) : null}
                         </div>
                         {/* Quick nominal picker - hanya muncul kalau sudah di-checklist bayar */}
                         {d.is_bayar && !isLocked && (
@@ -739,7 +801,7 @@ export function JimpitanForm({
                             {[15000, 10000, 5000].map((preset) => (
                               <button
                                 key={preset}
-                                onClick={() => updateDetail(p.id, preset, true)}
+                                onClick={() => autoSaveDetail(p.id, preset, true)}
                                 className={`px-2.5 py-1 rounded-md text-xs font-bold border-2 transition-all ${
                                   d.nominal === preset
                                     ? 'bg-emerald-500 border-emerald-500 text-white'
@@ -752,37 +814,22 @@ export function JimpitanForm({
                             <Input
                               type="number"
                               value={d.nominal || ''}
-                              onChange={(e) =>
-                                updateDetail(p.id, parseInt(e.target.value || '0', 10), true)
-                              }
+                              onChange={(e) => {
+                                const v = parseInt(e.target.value || '0', 10)
+                                autoSaveDetail(p.id, v, true)
+                              }}
                               disabled={isLocked}
                               className="w-20 h-7 text-xs text-right px-2"
                               placeholder="Manual"
                               step={500}
                             />
-                            <Button
-                              onClick={() => saveDetail(p.id)}
-                              size="sm"
-                              variant="ghost"
-                              disabled={isPending}
-                              className="h-7 w-7 p-0"
-                              title="Simpan"
-                            >
-                              <Save className="w-3.5 h-3.5" />
-                            </Button>
                           </div>
                         )}
-                        {/* Tombol simpan kalau di-checklist (auto-save on click nanti, atau pakai tombol ini) */}
-                        {d.is_bayar && !isLocked && (
-                          <div className="pl-9">
-                            <button
-                              onClick={() => saveDetail(p.id)}
-                              disabled={isPending}
-                              className="text-[10px] text-emerald-600 hover:text-emerald-700 hover:underline"
-                            >
-                              💾 Simpan permanen
-                            </button>
-                          </div>
+                        {/* Hint: status auto-save */}
+                        {d.is_bayar && !isLocked && isDirty && (
+                          <p className="text-[10px] text-amber-600 pl-9">
+                            ⏳ Menyimpan...
+                          </p>
                         )}
                       </div>
                     )
@@ -856,6 +903,112 @@ export function JimpitanForm({
             <pre className="bg-slate-900 text-slate-100 text-[10px] leading-relaxed p-3 rounded-lg overflow-x-auto whitespace-pre-wrap font-mono">
 {chatFormat}
             </pre>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ============================================ */}
+      {/* VALIDASI SESI — Panel khusus Bendahara/Ketua */}
+      {/* ============================================ */}
+      {canValidate && status === 'SUBMITTED' && (
+        <Card className="border-0 shadow-lg ring-2 ring-amber-300 bg-gradient-to-br from-amber-50 via-yellow-50 to-orange-50 overflow-hidden">
+          <CardContent className="p-5 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shrink-0 shadow-md">
+                <ShieldCheck className="w-6 h-6 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">
+                  Panel Validasi Bendahara
+                </p>
+                <p className="text-base font-bold text-amber-900 mt-0.5">
+                  Sesi menunggu ACC Anda
+                </p>
+                <p className="text-xs text-amber-700 mt-1">
+                  {formatTanggal(tanggal)} · Petugas: <span className="font-semibold">{namaInputter}</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Ringkasan validasi */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-white/80 backdrop-blur rounded-lg p-2.5 text-center border border-amber-200">
+                <p className="text-[9px] font-bold uppercase text-amber-700">Total</p>
+                <p className="text-base font-bold text-emerald-600 mt-0.5 truncate">
+                  {formatRupiah(totalNominal)}
+                </p>
+              </div>
+              <div className="bg-white/80 backdrop-blur rounded-lg p-2.5 text-center border border-amber-200">
+                <p className="text-[9px] font-bold uppercase text-amber-700">Bayar</p>
+                <p className="text-base font-bold text-blue-600 mt-0.5">
+                  {jumlahBayar} <span className="text-[10px] font-normal text-slate-500">KK</span>
+                </p>
+              </div>
+              <div className="bg-white/80 backdrop-blur rounded-lg p-2.5 text-center border border-amber-200">
+                <p className="text-[9px] font-bold uppercase text-amber-700">Hadir</p>
+                <p className="text-base font-bold text-purple-600 mt-0.5">
+                  {att.size} <span className="text-[10px] font-normal text-slate-500">org</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2 p-2.5 bg-amber-100/60 border border-amber-300 rounded-lg">
+              <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-amber-800 leading-relaxed">
+                <span className="font-bold">Perhatian:</span> ACC berarti sesi ini disetujui final dan total
+                nominal <span className="font-bold">{formatRupiah(totalNominal)}</span> akan masuk ke kas RT
+                sebagai pemasukan resmi. Jika ada data yang perlu dikoreksi, gunakan tombol Tolak agar
+                petugas bisa merevisi.
+              </p>
+            </div>
+
+            {/* Tombol ACC & Tolak */}
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                onClick={() => setRejectOpen(true)}
+                disabled={isPending}
+                variant="outline"
+                className="border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800 hover:border-rose-400"
+              >
+                <XCircle className="w-4 h-4" />
+                Tolak / Revisi
+              </Button>
+              <Button
+                onClick={() => setAccOpen(true)}
+                disabled={isPending}
+                className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white shadow-md shadow-emerald-500/30"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                {isPending ? 'Memproses...' : 'ACC & Setujui'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Banner info: sesi sudah di-ACC (read-only, semua role boleh lihat) */}
+      {status === 'APPROVED' && approvedByName && (
+        <Card className="border-0 shadow-md ring-1 ring-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50">
+          <CardContent className="p-4 flex items-start gap-3">
+            <div className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center shrink-0 shadow-md">
+              <CheckCircle2 className="w-5 h-5 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                Sesi Disetujui
+              </p>
+              <p className="text-sm font-bold text-emerald-900 mt-0.5">
+                Di-ACC oleh {approvedByName}
+              </p>
+              {approvedAt && (
+                <p className="text-[11px] text-emerald-700 mt-0.5">
+                  📅 {new Date(approvedAt).toLocaleString('id-ID', {
+                    day: 'numeric', month: 'short', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit',
+                  })}
+                </p>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -1013,6 +1166,148 @@ export function JimpitanForm({
                 <>
                   <Check className="w-4 h-4" />
                   Konfirmasi Submit
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Konfirmasi ACC Sesi */}
+      <Dialog open={accOpen} onOpenChange={setAccOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="mx-auto w-14 h-14 rounded-full bg-gradient-to-br from-emerald-400 to-teal-600 flex items-center justify-center mb-1 shadow-lg shadow-emerald-500/30">
+              <ShieldCheck className="w-7 h-7 text-white" />
+            </div>
+            <DialogTitle className="text-center">Konfirmasi ACC Sesi</DialogTitle>
+            <DialogDescription className="text-center">
+              {formatTanggal(tanggal)} · {namaInputter}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 my-2">
+            <div className="p-3 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl">
+              <p className="text-[10px] font-bold uppercase tracking-wider opacity-90">
+                Total yang akan masuk kas
+              </p>
+              <p className="text-2xl font-bold leading-tight mt-0.5">{formatRupiah(totalNominal)}</p>
+              <p className="text-[11px] opacity-90 mt-1">
+                {jumlahBayar} KK bayar · {att.size} penjaga hadir
+              </p>
+            </div>
+
+            <div className="flex items-start gap-2 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="text-[11px] text-emerald-800 leading-relaxed">
+                <p className="font-semibold mb-0.5">Setelah ACC:</p>
+                <ul className="space-y-0.5 list-disc list-inside">
+                  <li>Total <strong>{formatRupiah(totalNominal)}</strong> masuk ke kas RT sebagai pemasukan resmi</li>
+                  <li>Sesi terkunci — tidak bisa diubah lagi oleh siapa pun</li>
+                  <li>{currentUserName ? `${currentUserName} (${currentUserRole})` : 'Anda'} tercatat sebagai validator</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="sm:justify-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setAccOpen(false)}
+              disabled={isPending}
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              onClick={doAcc}
+              disabled={isPending}
+              className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white shadow-md"
+            >
+              {isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Memproses...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4" />
+                  Ya, ACC Sesi
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Konfirmasi Tolak Sesi (kembalikan ke AKTIF untuk revisi) */}
+      <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="mx-auto w-14 h-14 rounded-full bg-gradient-to-br from-rose-400 to-red-600 flex items-center justify-center mb-1 shadow-lg shadow-rose-500/30">
+              <XCircle className="w-7 h-7 text-white" />
+            </div>
+            <DialogTitle className="text-center">Tolak & Minta Revisi</DialogTitle>
+            <DialogDescription className="text-center">
+              Sesi akan dikembalikan ke status AKTIF agar petugas bisa memperbaikinya
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 my-2">
+            <div>
+              <label className="text-xs font-semibold text-slate-700 mb-1.5 block">
+                Alasan penolakan <span className="text-rose-600">*</span>
+              </label>
+              <Textarea
+                value={rejectAlasan}
+                onChange={(e) => setRejectAlasan(e.target.value)}
+                placeholder="Misal: Nominal Budi B-5 salah hitung, mohon dikoreksi. Total harusnya Rp 200.000."
+                rows={4}
+                className="text-sm"
+                autoFocus
+              />
+              <p className="text-[10px] text-slate-500 mt-1">
+                Alasan ini akan disimpan di catatan sesi dan terlihat oleh petugas saat mereka buka sesi.
+              </p>
+            </div>
+
+            <div className="flex items-start gap-2 p-2.5 bg-rose-50 border border-rose-200 rounded-lg">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-rose-800 leading-relaxed">
+                <span className="font-semibold">Catatan:</span> Tolak bukan menghapus data —
+                hanya mengembalikan status ke AKTIF. Petugas bisa mengedit data lalu submit ulang.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="sm:justify-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setRejectOpen(false)
+                setRejectAlasan('')
+              }}
+              disabled={isPending}
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              onClick={doReject}
+              disabled={isPending || !rejectAlasan.trim()}
+              variant="destructive"
+            >
+              {isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Memproses...
+                </>
+              ) : (
+                <>
+                  <XCircle className="w-4 h-4" />
+                  Tolak Sesi
                 </>
               )}
             </Button>

@@ -32,12 +32,16 @@ export default async function KasDetailPage({
   if (error || !sesi) notFound()
 
   // Ambil detail jimpitan (warga yang bayar)
+  // Catatan: jimpitan_detail real columns = login_id, nama_kk_snapshot, status_bayar, is_bayar
+  // (TIDAK ada blok_snapshot/nomor_rumah_snapshot) → join profiles untuk dapat blok/nomor_rumah
   const { data: details } = await supabase
     .from('jimpitan_detail')
-    .select('id, profile_id, nama_snapshot, blok_snapshot, nomor_rumah_snapshot, nominal, is_bayar')
+    .select(`
+      id, profile_id, login_id, nama_kk_snapshot, nominal, is_bayar,
+      profile:profiles!jimpitan_detail_profile_id_fkey(id, nama_kk, blok, nomor_rumah)
+    `)
     .eq('sesi_id', id)
-    .order('blok_snapshot', { ascending: true })
-    .order('nomor_rumah_snapshot', { ascending: true })
+    .order('login_id', { ascending: true })
 
   // Ambil attendance
   const { data: attendance } = await supabase
@@ -139,22 +143,28 @@ export default async function KasDetailPage({
             <div className="divide-y divide-slate-100">
               {details
                 .filter((d) => d.is_bayar)
-                .map((d) => (
+                .map((d) => {
+                  // Blok/nomor_rumah dari joined profile (jimpitan_detail tidak punya snapshot-nya)
+                  const profile = Array.isArray(d.profile) ? d.profile[0] : d.profile
+                  const blok = profile?.blok ?? '-'
+                  const noRumah = profile?.nomor_rumah ?? '-'
+                  return (
                   <div key={d.id} className="flex items-center gap-3 p-3">
                     <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white flex items-center justify-center text-sm font-bold shrink-0">
-                      {d.nama_snapshot?.[0]?.toUpperCase()}
+                      {d.nama_kk_snapshot?.[0]?.toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold truncate">{d.nama_snapshot}</p>
+                      <p className="text-sm font-semibold truncate">{d.nama_kk_snapshot}</p>
                       <p className="text-[10px] text-muted-foreground">
-                        Blok {d.blok_snapshot} No. {d.nomor_rumah_snapshot}
+                        Blok {blok} No. {noRumah} · {d.login_id}
                       </p>
                     </div>
                     <p className="text-sm font-bold text-emerald-600 shrink-0">
                       {formatRupiah(Number(d.nominal))}
                     </p>
                   </div>
-                ))}
+                  )
+                })}
             </div>
           ) : (
             <div className="p-6 text-center text-sm text-muted-foreground">

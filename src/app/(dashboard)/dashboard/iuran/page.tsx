@@ -1,8 +1,9 @@
 import { Card, CardContent, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { createAdminClient } from '@/lib/supabase/server'
-import { Wallet, CheckCircle2, Clock, AlertCircle, TrendingUp, Users } from 'lucide-react'
+import { Wallet, CheckCircle2, Clock, AlertCircle, TrendingUp, Users, Sparkles } from 'lucide-react'
 import { formatRupiah, getMonthName } from '@/lib/format'
+import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
 
@@ -55,17 +56,28 @@ export default async function IuranPage() {
 
   return (
     <div className="space-y-6 pb-8">
-      <div>
-        <div className="flex items-center gap-2 mb-1">
-          <Wallet className="w-4 h-4 text-blue-500" />
-          <span className="text-[10px] font-bold uppercase tracking-widest text-blue-600">
-            Iuran Bulanan
-          </span>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Wallet className="w-4 h-4 text-blue-500" />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-blue-600">
+              Iuran Bulanan
+            </span>
+          </div>
+          <h1 className="text-2xl md:text-3xl font-bold">Iuran {getMonthName(currentMonth)}</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Status tagihan & pembayaran warga bulan ini
+          </p>
         </div>
-        <h1 className="text-2xl md:text-3xl font-bold">Iuran {getMonthName(currentMonth)}</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Status tagihan & pembayaran warga bulan ini
-        </p>
+        <div className="flex gap-2 shrink-0">
+          <Link
+            href="/dashboard/iuran/bulk-input"
+            className="inline-flex shrink-0 items-center justify-center rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-semibold h-10 px-4 shadow-md transition-colors gap-2"
+          >
+            <Sparkles className="w-4 h-4" />
+            Bulk Input
+          </Link>
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -132,7 +144,7 @@ export default async function IuranPage() {
         <Card className="border-0 shadow-md ring-1 ring-amber-200/60 overflow-hidden">
           <div className="bg-gradient-to-r from-amber-50 to-white px-4 py-2.5 border-b border-amber-100">
             <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
-              PERLU KONFIRMASI (Janda/Khusus)
+              PERLU KONFIRMASI (Khusus)
             </p>
           </div>
           <CardContent className="p-4 flex items-center gap-3">

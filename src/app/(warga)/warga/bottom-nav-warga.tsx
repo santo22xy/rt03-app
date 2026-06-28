@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
-  Home, Receipt, Shield, HandCoins,
+  Home, Receipt, Shield, Megaphone, HeartHandshake,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 
@@ -11,14 +11,15 @@ type NavItem = {
   href: string
   label: string
   icon: ComponentType<{ className?: string }>
+  isCenter?: boolean
 }
 
 const WARGA_NAV: NavItem[] = [
-  { href: '/warga', label: 'Beranda', icon: Home },
-  { href: '/warga/iuran', label: 'Iuran', icon: Receipt },
-  // center FAB: Ronda/Jimpitan (aksi utama warga)
-  { href: '/warga/ronda', label: 'Ronda', icon: Shield },
-  { href: '/warga/pengumuman', label: 'Info', icon: HandCoins },
+  { href: '/warga',              label: 'Beranda',    icon: Home },
+  { href: '/warga/iuran',        label: 'Iuran',      icon: Receipt },
+  { href: '/warga/dana-khusus',  label: 'Dana Khusus', icon: HeartHandshake, isCenter: true },
+  { href: '/warga/ronda',        label: 'Ronda',      icon: Shield },
+  { href: '/warga/pengumuman',   label: 'Info',       icon: Megaphone },
 ]
 
 export function BottomNavWarga() {
@@ -29,67 +30,56 @@ export function BottomNavWarga() {
     return pathname === href || pathname.startsWith(href + '/')
   }
 
-  // Layout: 1 kiri - 1 center FAB - 2 kanan (atau 1-1)
-  // Untuk warga: 1 kiri (Beranda), center FAB (Ronda/Jimpitan), 2 kanan (Iuran, Info)
-  const leftItems = WARGA_NAV.slice(0, 1)
-  const centerItem = WARGA_NAV[2]
-  const rightItems = WARGA_NAV.slice(3)
-
   return (
     <nav
       aria-label="Bottom navigation warga"
       className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-[0_-4px_24px_-4px_rgba(0,0,0,0.06)] pb-[env(safe-area-inset-bottom)]"
     >
-      <div className="relative grid grid-cols-4 items-center h-16 max-w-lg mx-auto">
-        {/* Left 1 */}
-        {leftItems.map(item => {
+      <div className="relative grid grid-cols-5 items-end h-16 max-w-lg mx-auto">
+        {WARGA_NAV.map((item) => {
           const active = isActive(item.href)
+          const isCenter = item.isCenter === true  // Dana Khusus sebagai center FAB (pink theme)
+          const isAccent = item.href === '/warga/dana-khusus'
           return (
             <Link
               key={item.href}
               href={item.href}
-              className="flex flex-col items-center justify-center gap-0.5 h-full group"
               aria-current={active ? 'page' : undefined}
+              className={`relative flex flex-col items-center justify-end h-full pb-2 group ${
+                isCenter ? '-mt-7' : ''
+              }`}
             >
-              <item.icon className={`w-5 h-5 transition-colors ${active ? 'text-emerald-600' : 'text-slate-500 group-hover:text-slate-700'}`} />
-              <span className={`text-[10px] font-semibold transition-colors ${active ? 'text-emerald-600' : 'text-slate-500 group-hover:text-slate-700'}`}>
-                {item.label}
-              </span>
-            </Link>
-          )
-        })}
-
-        {/* Center 2 cols (FAB lebih besar, span 2 cols) */}
-        {centerItem && (
-          <Link
-            href={centerItem.href}
-            className="relative flex items-center justify-center -mt-7 col-span-2"
-            aria-current={isActive(centerItem.href) ? 'page' : undefined}
-          >
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-amber-500 via-orange-500 to-rose-500 shadow-lg shadow-orange-500/40 ring-4 ring-white" />
-            </div>
-            <div className="relative flex flex-col items-center justify-center w-16 h-16">
-              <centerItem.icon className="w-6 h-6 text-white" />
-              <span className="text-[9px] font-bold text-white mt-0.5">Ronda</span>
-            </div>
-          </Link>
-        )}
-
-        {/* Right 1 */}
-        {rightItems.map(item => {
-          const active = isActive(item.href)
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="flex flex-col items-center justify-center gap-0.5 h-full group"
-              aria-current={active ? 'page' : undefined}
-            >
-              <item.icon className={`w-5 h-5 transition-colors ${active ? 'text-emerald-600' : 'text-slate-500 group-hover:text-slate-700'}`} />
-              <span className={`text-[10px] font-semibold transition-colors ${active ? 'text-emerald-600' : 'text-slate-500 group-hover:text-slate-700'}`}>
-                {item.label}
-              </span>
+              {isCenter ? (
+                <>
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-14 h-14 rounded-full bg-gradient-to-br from-pink-500 via-rose-500 to-red-500 shadow-lg shadow-rose-500/40 ring-4 ring-white flex items-center justify-center">
+                    <item.icon className="w-6 h-6 text-white" />
+                  </div>
+                  <span className={`mt-9 text-[10px] font-bold transition-colors ${
+                    active ? 'text-pink-700' : 'text-slate-600 group-hover:text-slate-900'
+                  }`}>
+                    {item.label}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <item.icon
+                    className={`w-5 h-5 transition-colors ${
+                      active
+                        ? (isAccent ? 'text-pink-600' : 'text-emerald-600')
+                        : 'text-slate-500 group-hover:text-slate-700'
+                    }`}
+                  />
+                  <span
+                    className={`text-[10px] font-semibold mt-0.5 transition-colors ${
+                      active
+                        ? (isAccent ? 'text-pink-600' : 'text-emerald-600')
+                        : 'text-slate-500 group-hover:text-slate-700'
+                    }`}
+                  >
+                    {item.label}
+                  </span>
+                </>
+              )}
             </Link>
           )
         })}

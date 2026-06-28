@@ -1,6 +1,6 @@
 export type UserRole = 'WARGA' | 'PENGURUS' | 'KETUA_RT' | 'BENDAHARA' | 'SEKRETARIS' | 'SUPERADMIN'
 
-export type KategoriTarif = 'NORMAL' | 'JANDA'
+export type KategoriTarif = 'NORMAL' | 'KHUSUS'
 
 export type KycStatus = 'UNVERIFIED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
 

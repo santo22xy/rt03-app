@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import Link from 'next/link'
 import { ArrowLeft, CheckCircle2, Clock, XCircle, AlertCircle } from 'lucide-react'
-import { createAdminClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { formatRupiah, formatTanggal } from '@/lib/format'
 import { JimpitanForm } from './jimpitan-form'
 
@@ -19,13 +19,14 @@ export default async function JimpitanDetailPage({
   // FIX: pakai admin client untuk bypass RLS recursion di profiles policy.
   const supabase = createAdminClient()
 
-  // Ambil data sesi
+  // Ambil data sesi (termasuk approved_by untuk join dengan profile)
   const { data: sesi, error } = await supabase
     .from('jimpitan_sesi')
     .select(`
       id, tanggal, status, total_nominal, jumlah_warga_bayar, jumlah_penjaga_hadir,
       kelompok_id, keadaan, catatan, nama_inputter_snapshot, blok_inputter_snapshot,
-      waktu_mulai, waktu_submit, approved_at
+      waktu_mulai, waktu_submit, approved_at, approved_by,
+      approver:profiles!jimpitan_sesi_approved_by_fkey(id, nama_kk, role)
     `)
     .eq('id', id)
     .maybeSingle()
@@ -126,6 +127,27 @@ export default async function JimpitanDetailPage({
     REJECTED: { color: 'bg-rose-100 text-rose-700', label: '❌ Ditolak', icon: XCircle },
   }[(sesi.status as StatusKey)] || { color: 'bg-slate-100 text-slate-700', label: sesi.status, icon: Clock }
 
+  // Ambil profil user yang sedang login (untuk panel validasi)
+  const auth = await createClient()
+  const { data: { user } } = await auth.auth.getUser()
+  let currentUserRole = ''
+  let currentUserName: string | null = null
+  if (user) {
+    const { data: me } = await supabase
+      .from('profiles')
+      .select('id, nama_kk, role')
+      .eq('id', user.id)
+      .maybeSingle()
+    currentUserRole = me?.role ?? ''
+    currentUserName = me?.nama_kk ?? null
+  }
+
+  // Siapkan info approver (kalau ada)
+  type ApproverRel = { id: string; nama_kk: string; role: string } | { id: string; nama_kk: string; role: string }[] | null
+  const approverRaw = (sesi as { approver?: ApproverRel }).approver
+  const approverObj = Array.isArray(approverRaw) ? approverRaw[0] : approverRaw
+  const approvedByName = approverObj?.nama_kk ?? null
+
   return (
     <div className="space-y-4 pb-8">
       {/* Header */}
@@ -185,6 +207,10 @@ export default async function JimpitanDetailPage({
         anggotaKelompok={anggotaKelompok}
         keadaan={sesi.keadaan}
         catatan={sesi.catatan}
+        approvedByName={approvedByName}
+        approvedAt={sesi.approved_at}
+        currentUserRole={currentUserRole}
+        currentUserName={currentUserName}
       />
     </div>
   )

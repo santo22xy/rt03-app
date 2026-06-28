@@ -116,7 +116,11 @@ export async function pengurusBuatSesi(formData: FormData): Promise<{
       input_by: profile.id,
       nama_inputter_snapshot: `${profile.nama_kk} (Pengurus)`,
       blok_inputter_snapshot: profile.blok,
-      status: 'AKTIF',
+      // FIX: pengurus yang buat sesi manual → langsung APPROVED (skip alur ACC)
+      // biar total_pendapatan langsung terhitung di dashboard
+      status: 'APPROVED',
+      approved_by: profile.id,
+      approved_at: new Date().toISOString(),
       catatan: 'Dibuat manual oleh pengurus (uji coba alur)',
     })
     .select('id')
@@ -181,7 +185,16 @@ export async function daftarJadiInputter(tanggal: string) {
         ? `${profile.nama_kk} (Pengurus)`
         : profile.nama_kk,
       blok_inputter_snapshot: profile.blok,
-      status: 'AKTIF',
+      // FIX: pengurus yang input manual → langsung APPROVED biar langsung
+      // masuk dashboard "Iuran Bulan Ini" tanpa alur ACC terpisah.
+      // Warga biasa tetap AKTIF dan perlu submit + ACC oleh bendahara.
+      ...(isPengurus(profile)
+        ? {
+            status: 'APPROVED',
+            approved_by: profile.id,
+            approved_at: new Date().toISOString(),
+          }
+        : { status: 'AKTIF' }),
     })
     .select('id')
     .single()
@@ -403,25 +416,26 @@ export async function updateJimpitanDetail(formData: FormData) {
   // Ambil snapshot profile
   const { data: warga } = await admin
     .from('profiles')
-    .select('nama_kk, blok, nomor_rumah')
+    .select('nama_kk, login_id, blok, nomor_rumah')
     .eq('id', profileId)
     .single()
 
   if (!warga) return { error: 'Profile warga tidak ditemukan' }
 
   // Upsert detail
+  // Catatan: kolom real di DB = login_id, nama_kk_snapshot, status_bayar
+  // (bukan nama_snapshot/blok_snapshot/nomor_rumah_snapshot seperti di SQL 20)
   const { error } = await admin
     .from('jimpitan_detail')
     .upsert(
       {
         sesi_id: sesiId,
         profile_id: profileId,
-        nama_snapshot: warga.nama_kk,
-        blok_snapshot: warga.blok,
-        nomor_rumah_snapshot: warga.nomor_rumah,
+        login_id: warga.login_id,
+        nama_kk_snapshot: warga.nama_kk,
         nominal: isBayar ? nominal : 0,
         is_bayar: isBayar,
-        updated_at: new Date().toISOString(),
+        status_bayar: isBayar ? 'BAYAR' : 'BELUM',
       },
       { onConflict: 'sesi_id,profile_id' }
     )
@@ -457,7 +471,7 @@ export async function bulkSetBelumBayar(sesiId: string) {
   // Filter blok != 'X' supaya SUPERADMIN tidak ikut
   const { data: profiles } = await admin
     .from('profiles')
-    .select('id, nama_kk, blok, nomor_rumah')
+    .select('id, nama_kk, login_id, blok, nomor_rumah')
     .eq('is_active', true)
     .not('blok', 'is', null)
     .not('nomor_rumah', 'is', null)
@@ -465,14 +479,16 @@ export async function bulkSetBelumBayar(sesiId: string) {
 
   if (!profiles || profiles.length === 0) return { error: 'Tidak ada warga' }
 
+  // Kolom real di DB: login_id, nama_kk_snapshot, status_bayar
+  // (SQL 20 dokumentasi lama — DB sudah di-migrasi, lihat sql/48)
   const rows = profiles.map((p) => ({
     sesi_id: sesiId,
     profile_id: p.id,
-    nama_snapshot: p.nama_kk,
-    blok_snapshot: p.blok,
-    nomor_rumah_snapshot: p.nomor_rumah,
+    login_id: p.login_id,
+    nama_kk_snapshot: p.nama_kk,
     nominal: 0,
     is_bayar: false,
+    status_bayar: 'BELUM',
   }))
 
   const { error } = await admin
@@ -586,81 +602,51 @@ export async function submitSesi(formData: FormData) {
   const sesiId = formData.get('sesiId') as string
   const keadaan = formData.get('keadaan') as string
   const catatan = formData.get('catatan') as string | null
+  const detailsJson = formData.get('details') as string | null
 
   if (!sesiId) return { error: 'Sesi ID tidak ada' }
 
   const admin = createAdminClient()
-  const { data: sesi } = await admin
-    .from('jimpitan_sesi')
-    .select('input_by, status')
-    .eq('id', sesiId)
-    .single()
 
-  if (!sesi) return { error: 'Sesi tidak ditemukan' }
-  if (!isPengurus(profile) && sesi.input_by !== profile.id) {
-    return { error: 'Hanya petugas sesi atau pengurus yang boleh submit' }
-  }
-  if (sesi.status !== 'AKTIF') return { error: 'Sesi sudah disubmit/ditutup' }
-
-  // Auto-tandai penjaga jadwal sebagai hadir
-  const { data: sesiFull } = await admin
-    .from('jimpitan_sesi')
-    .select('tanggal')
-    .eq('id', sesiId)
-    .single()
-
-  if (sesiFull) {
-    const { data: penjaga } = await admin
-      .from('v_penjaga_efektif')
-      .select('profile_efektif_id, nama_efektif')
-      .eq('tanggal', sesiFull.tanggal)
-      .maybeSingle()
-
-    if (penjaga) {
-      // Lookup login_id dari profile untuk backward compat dengan NOT NULL constraint
-      const { data: profileData } = await admin
+  // 1. Save details first to ensure they are in DB before status change
+  if (detailsJson) {
+    try {
+      const details: Record<string, { nominal: number; is_bayar: boolean }> = JSON.parse(detailsJson)
+      
+      const profileIds = Object.keys(details)
+      const { data: profiles } = await admin
         .from('profiles')
-        .select('login_id')
-        .eq('id', penjaga.profile_efektif_id)
-        .maybeSingle()
+        .select('id, nama_kk, login_id, blok, nomor_rumah')
+        .in('id', profileIds)
 
-      await admin.from('ronda_attendance').upsert(
-        {
-          sesi_id: sesiId,
-          profile_id: penjaga.profile_efektif_id,
-          nama_snapshot: penjaga.nama_efektif,
-          nama_kk_snapshot: penjaga.nama_efektif,
-          login_id: profileData?.login_id || null,
-        },
-        { onConflict: 'sesi_id,profile_id', ignoreDuplicates: true }
-      )
+      if (profiles && profiles.length > 0) {
+        const rows = profiles.map((p) => {
+          const d = details[p.id]
+          return {
+            sesi_id: sesiId,
+            profile_id: p.id,
+            login_id: p.login_id,
+            nama_kk_snapshot: p.nama_kk,
+            blok_snapshot: p.blok,
+            nomor_rumah_snapshot: p.nomor_rumah,
+            nominal: d?.nominal ?? 0,
+            is_bayar: d?.is_bayar ?? false,
+            status_bayar: d?.is_bayar ? 'BAYAR' : 'BELUM',
+          }
+        })
+
+        const { error: upsertError } = await admin
+          .from('jimpitan_detail')
+          .upsert(rows, { onConflict: 'sesi_id,profile_id' })
+
+        if (upsertError) throw upsertError
+      }
+    } catch (e: any) {
+      return { error: `Gagal menyimpan detail jimpitan: ${e.message}` }
     }
   }
+...
 
-  const { error } = await admin
-    .from('jimpitan_sesi')
-    .update({
-      status: 'SUBMITTED',
-      waktu_submit: new Date().toISOString(),
-      keadaan: keadaan || 'AMAN',
-      catatan: catatan || null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', sesiId)
-
-  if (error) return { error: error.message }
-
-  revalidatePath('/dashboard/jimpitan')
-  revalidatePath('/dashboard/kas')
-  revalidatePath('/dashboard')
-  revalidatePath('/warga')
-  await recalcJumlahPenjagaHadir(sesiId)
-
-  revalidatePath('/warga/ronda')
-  revalidatePath(`/warga/jimpitan/${sesiId}`)
-  revalidatePath(`/dashboard/jimpitan/${sesiId}`)
-  return { success: true }
-}
 
 // =====================================================
 // BENDAHARA: ACC SESI
@@ -1140,5 +1126,301 @@ export async function nonaktifkanKasKategori(id: string): Promise<{
     ...(count && count > 0
       ? { error: `Kategori dipakai di ${count} transaksi (dinonaktifkan, tapi data lama tetap aman)` }
       : {}),
+  }
+}
+
+// =====================================================
+// EXPORT LAPORAN KAS BULANAN (CSV)
+// FIX Problem #2: Fitur export laporan bulanan (Pemasukan, Pengeluaran, Saldo)
+//
+// Dipakai oleh /dashboard/kas dengan date range filter.
+// Format CSV:
+//   - Section 1: Ringkasan (Pemasukan, Pengeluaran, Saldo)
+//   - Section 2: Detail transaksi (sorted by tanggal ASC)
+//
+// Return: string CSV (UTF-8 BOM untuk Excel compatibility)
+// =====================================================
+export async function exportLaporanKas(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+  csv?: string
+  filename?: string
+}> {
+  const profile = await getCurrentUser()
+  if (!profile) return { error: 'Tidak terautentikasi' }
+  if (!['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'SUPERADMIN'].includes(profile.role)) {
+    return { error: 'Hanya pengurus yang boleh export laporan' }
+  }
+
+  const startDate = formData.get('startDate') as string
+  const endDate = formData.get('endDate') as string
+  const tipeFilter = (formData.get('tipe') as string) ?? ''  // '', 'MASUK', 'KELUAR'
+
+  if (!startDate || !endDate) {
+    return { error: 'Tanggal awal & akhir wajib diisi' }
+  }
+
+  const admin = createAdminClient()
+  let query = admin
+    .from('kas_transaksi')
+    .select('tanggal, tipe, kategori, uraian, nominal, login_id, metode_bayar, sumber_dana, ditalangi_oleh, catatan, created_by, created_at')
+    .gte('tanggal', startDate)
+    .lte('tanggal', endDate)
+    .order('tanggal', { ascending: true })
+    .order('created_at', { ascending: true })
+
+  if (tipeFilter === 'MASUK' || tipeFilter === 'KELUAR') {
+    query = query.eq('tipe', tipeFilter)
+  }
+
+  const { data: trx, error } = await query
+  if (error) return { error: error.message }
+
+  const rows = trx ?? []
+
+  // Compute summary
+  const totalMasuk = rows
+    .filter((r) => r.tipe === 'MASUK')
+    .reduce((s, r) => s + Number(r.nominal), 0)
+  const totalKeluar = rows
+    .filter((r) => r.tipe === 'KELUAR')
+    .reduce((s, r) => s + Number(r.nominal), 0)
+  const jumlahMasuk = rows.filter((r) => r.tipe === 'MASUK').length
+  const jumlahKeluar = rows.filter((r) => r.tipe === 'KELUAR').length
+
+  // Compute saldo berjalan (running balance) — asumsikan data di-sort ASC
+  // Kita butuh SEMUA transaksi sebelum startDate untuk saldo awal
+  const { data: trxSebelum } = await admin
+    .from('kas_transaksi')
+    .select('tipe, nominal')
+    .lt('tanggal', startDate)
+
+  const saldoAwal = (trxSebelum ?? [])
+    .reduce((s, r) => s + (r.tipe === 'MASUK' ? Number(r.nominal) : -Number(r.nominal)), 0)
+
+  // Group by date for running balance
+  let runningSaldo = saldoAwal
+  const enrichedRows = rows.map((r) => {
+    if (r.tipe === 'MASUK') runningSaldo += Number(r.nominal)
+    else runningSaldo -= Number(r.nominal)
+    return { ...r, saldo_berjalan: runningSaldo }
+  })
+
+  // ===== Build CSV =====
+  const escape = (v: unknown): string => {
+    if (v === null || v === undefined) return ''
+    const s = String(v)
+    // Escape quotes and wrap with quotes if contains comma/quote/newline
+    if (s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r')) {
+      return '"' + s.replace(/"/g, '""') + '"'
+    }
+    return s
+  }
+
+  const lines: string[] = []
+
+  // Header section
+  lines.push('LAPORAN KAS RT 03')
+  lines.push(`Periode,${escape(startDate)},s/d,${escape(endDate)}`)
+  lines.push(`Tipe Filter,${escape(tipeFilter || 'SEMUA (MASUK + KELUAR)')}`)
+  lines.push(`Digenerate,${escape(new Date().toLocaleString('id-ID'))}`)
+  lines.push(`Oleh,${escape(profile.nama_kk)} (${escape(profile.role)})`)
+  lines.push('')
+
+  // Section 1: Ringkasan
+  lines.push('RINGKASAN')
+  lines.push('Komponen,Nilai')
+  lines.push(`Saldo Awal (sebelum ${escape(startDate)}),${saldoAwal}`)
+  lines.push(`Total Pemasukan,${totalMasuk}`)
+  lines.push(`Jumlah Transaksi Pemasukan,${jumlahMasuk}`)
+  lines.push(`Total Pengeluaran,${totalKeluar}`)
+  lines.push(`Jumlah Transaksi Pengeluaran,${jumlahKeluar}`)
+  lines.push(`Saldo Periode Ini (Pemasukan - Pengeluaran),${totalMasuk - totalKeluar}`)
+  lines.push(`Saldo Akhir (Saldo Awal + Saldo Periode),${saldoAwal + (totalMasuk - totalKeluar)}`)
+  lines.push('')
+
+  // Section 2: Breakdown per kategori
+  const kategoriMap = new Map<string, { masuk: number; keluar: number }>()
+  for (const r of rows) {
+    const k = r.kategori || 'LAINNYA'
+    if (!kategoriMap.has(k)) kategoriMap.set(k, { masuk: 0, keluar: 0 })
+    const v = kategoriMap.get(k)!
+    if (r.tipe === 'MASUK') v.masuk += Number(r.nominal)
+    else v.keluar += Number(r.nominal)
+  }
+  lines.push('BREAKDOWN PER KATEGORI')
+  lines.push('Kategori,Total Pemasukan,Total Pengeluaran,Net')
+  for (const [k, v] of Array.from(kategoriMap.entries()).sort()) {
+    lines.push(`${escape(k)},${v.masuk},${v.keluar},${v.masuk - v.keluar}`)
+  }
+  lines.push('')
+
+  // Section 3: Detail transaksi
+  lines.push('DETAIL TRANSAKSI')
+  lines.push('Tanggal,Tipe,Kategori,Uraian,Nominal,Metode Bayar,Sumber Dana,Login ID,Ditalangi Oleh,Saldo Berjalan,Catatan,Input Oleh')
+  for (const r of enrichedRows) {
+    lines.push([
+      escape(r.tanggal),
+      escape(r.tipe),
+      escape(r.kategori),
+      escape(r.uraian),
+      Number(r.nominal),
+      escape(r.metode_bayar ?? ''),
+      escape(r.sumber_dana ?? ''),
+      escape(r.login_id ?? ''),
+      escape(r.ditalangi_oleh ?? ''),
+      r.saldo_berjalan,
+      escape(r.catatan ?? ''),
+      escape(r.created_by ?? ''),
+    ].join(','))
+  }
+
+  // CSV with UTF-8 BOM for Excel compatibility
+  const csv = '\uFEFF' + lines.join('\n')
+  const filename = `Laporan_Kas_${startDate}_sd_${endDate}.csv`
+
+  return { success: true, csv, filename }
+}
+
+// =====================================================
+// EXPORT LAPORAN KAS BULANAN (PDF - DATA)
+// FIX Problem #3: Tambah fitur export laporan bulanan RT ke PDF
+//
+// Server action: hitung semua data summary + transaksi untuk dirender
+// sebagai PDF oleh client component (export-laporan-pdf-button.tsx)
+// dengan jspdf + jspdf-autotable.
+//
+// Return: JSON data siap-render (bukan binary PDF, supaya tidak
+//         membebani bundle Next.js dengan library PDF di server).
+// =====================================================
+export type LaporanKasData = {
+  startDate: string
+  endDate: string
+  tipeFilter: string
+  generator: string
+  saldoAwal: number
+  totalMasuk: number
+  totalKeluar: number
+  jumlahMasuk: number
+  jumlahKeluar: number
+  saldoAkhir: number
+  kategoriBreakdown: Array<{
+    kategori: string
+    masuk: number
+    keluar: number
+  }>
+  detailRows: Array<{
+    tanggal: string
+    tipe: 'MASUK' | 'KELUAR'
+    kategori: string
+    uraian: string
+    nominal: number
+    loginId: string | null
+    saldoBerjalan: number
+  }>
+}
+
+export async function exportLaporanKasPDFData(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+  data?: LaporanKasData
+}> {
+  const profile = await getCurrentUser()
+  if (!profile) return { error: 'Tidak terautentikasi' }
+  if (!['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'SUPERADMIN'].includes(profile.role)) {
+    return { error: 'Hanya pengurus yang boleh export laporan' }
+  }
+
+  const startDate = formData.get('startDate') as string
+  const endDate = formData.get('endDate') as string
+  const tipeFilter = (formData.get('tipe') as string) ?? ''
+
+  if (!startDate || !endDate) {
+    return { error: 'Tanggal awal & akhir wajib diisi' }
+  }
+
+  const admin = createAdminClient()
+  let query = admin
+    .from('kas_transaksi')
+    .select('tanggal, tipe, kategori, uraian, nominal, login_id')
+    .gte('tanggal', startDate)
+    .lte('tanggal', endDate)
+    .order('tanggal', { ascending: true })
+    .order('created_at', { ascending: true })
+
+  if (tipeFilter === 'MASUK' || tipeFilter === 'KELUAR') {
+    query = query.eq('tipe', tipeFilter)
+  }
+
+  const { data: trx, error } = await query
+  if (error) return { error: error.message }
+
+  const rows = trx ?? []
+
+  // Compute summary
+  const totalMasuk = rows
+    .filter((r) => r.tipe === 'MASUK')
+    .reduce((s, r) => s + Number(r.nominal), 0)
+  const totalKeluar = rows
+    .filter((r) => r.tipe === 'KELUAR')
+    .reduce((s, r) => s + Number(r.nominal), 0)
+  const jumlahMasuk = rows.filter((r) => r.tipe === 'MASUK').length
+  const jumlahKeluar = rows.filter((r) => r.tipe === 'KELUAR').length
+
+  // Saldo awal (semua transaksi sebelum startDate)
+  const { data: trxSebelum } = await admin
+    .from('kas_transaksi')
+    .select('tipe, nominal')
+    .lt('tanggal', startDate)
+
+  const saldoAwal = (trxSebelum ?? [])
+    .reduce((s, r) => s + (r.tipe === 'MASUK' ? Number(r.nominal) : -Number(r.nominal)), 0)
+  const saldoAkhir = saldoAwal + (totalMasuk - totalKeluar)
+
+  // Breakdown per kategori
+  const kategoriMap = new Map<string, { masuk: number; keluar: number }>()
+  for (const r of rows) {
+    const k = r.kategori || 'LAINNYA'
+    if (!kategoriMap.has(k)) kategoriMap.set(k, { masuk: 0, keluar: 0 })
+    const v = kategoriMap.get(k)!
+    if (r.tipe === 'MASUK') v.masuk += Number(r.nominal)
+    else v.keluar += Number(r.nominal)
+  }
+  const kategoriBreakdown = Array.from(kategoriMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([kategori, v]) => ({ kategori, masuk: v.masuk, keluar: v.keluar }))
+
+  // Detail rows dengan running balance
+  let runningSaldo = saldoAwal
+  const detailRows = rows.map((r) => {
+    if (r.tipe === 'MASUK') runningSaldo += Number(r.nominal)
+    else runningSaldo -= Number(r.nominal)
+    return {
+      tanggal: r.tanggal,
+      tipe: r.tipe as 'MASUK' | 'KELUAR',
+      kategori: r.kategori || 'LAINNYA',
+      uraian: r.uraian,
+      nominal: Number(r.nominal),
+      loginId: r.login_id,
+      saldoBerjalan: runningSaldo,
+    }
+  })
+
+  return {
+    success: true,
+    data: {
+      startDate,
+      endDate,
+      tipeFilter,
+      generator: profile.nama_kk ?? 'Pengurus',
+      saldoAwal,
+      totalMasuk,
+      totalKeluar,
+      jumlahMasuk,
+      jumlahKeluar,
+      saldoAkhir,
+      kategoriBreakdown,
+      detailRows,
+    },
   }
 }

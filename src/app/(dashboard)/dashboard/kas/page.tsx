@@ -8,6 +8,8 @@ import { formatRupiah, formatTanggal } from '@/lib/format'
 import nextDynamic from 'next/dynamic'
 import { FilterKas } from './filter-kas'
 import { KasDateGroup, type KasTransaksiItem } from './kas-date-group'
+import { ExportLaporanButton } from '../export-laporan-button'
+import { ExportLaporanPDFButton } from '../export-laporan-pdf-button'
 
 // Lazy-load form transaksi (paling berat, banyak state & dialog) — tidak di-bundle di initial JS
 const TambahTransaksiKas = nextDynamic(
@@ -116,7 +118,11 @@ export default async function KasPage({
             Buku besar kas & input transaksi manual
           </p>
         </div>
-        <TambahTransaksiKas />
+        <div className="flex gap-2 shrink-0">
+          <ExportLaporanButton />
+          <ExportLaporanPDFButton />
+          <TambahTransaksiKas />
+        </div>
       </div>
 
       {/* Hero Saldo */}

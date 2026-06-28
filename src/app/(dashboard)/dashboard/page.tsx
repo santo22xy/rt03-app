@@ -6,6 +6,7 @@ import {
   Users, Wallet, Megaphone,
   TrendingUp, AlertCircle, CheckCircle2, Clock,
   Activity, Sparkles, HandCoins, Shield, ChevronRight,
+  HeartHandshake,
 } from 'lucide-react'
 import { formatRupiah, getMonthName } from '@/lib/format'
 import { NextJadwalCard } from './next-jadwal-card'
@@ -48,8 +49,8 @@ export default async function DashboardPage() {
   // Fetch all data in parallel
   // CATATAN: sumber data finansial adalah jimpitan_tagihan & jimpitan_sesi
   // - jimpitan_tagihan.status: LUNAS | CICIL | BELUM (dinormalisasi script 27)
-  // - jimpitan_sesi.status:     DRAFT | ACC | REJECTED (schema 21)
-  // - jimpitan_sesi.total_pendapatan (schema 21, bukan total_nominal)
+  // - jimpitan_sesi.status:     AKTIF | SUBMITTED | APPROVED | REJECTED (SQL 20)
+  // - jimpitan_sesi.total_pendapatan (SQL 20, bukan total_nominal)
   const [
     wargaRes, pengurusRes,
     tagihanCurrentRes,
@@ -59,30 +60,37 @@ export default async function DashboardPage() {
     recentPaymentRes,
     jimpitanPendingRes, jimpitanMonthRes,
     nextJadwalRes, jimpitanWindowRes,
+    danaKhususActiveRes,
   ] = await Promise.all([
     // WARGA AKTIF: semua profile aktif KECUALI X-0 (superadmin placeholder, bukan alamat rumah nyata)
     admin.from('profiles').select('id', { count: 'exact', head: true }).eq('is_active', true).neq('login_id', 'X-0'),
     admin.from('profiles').select('id', { count: 'exact', head: true }).in('role', ['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'PENGURUS', 'SUPERADMIN']),
     // Tagihan iuran bulan ini (jimpitan_tagihan, status: BELUM | CICIL | LUNAS)
     admin.from('jimpitan_tagihan').select('nominal_tagihan, total_terbayar, status').eq('periode_bulan', currentMonthStr),
-    // Total pendapatan jimpitan ACC bulan ini vs bulan lalu
-    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'ACC').gte('tanggal', currentMonthStr),
-    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'ACC').gte('tanggal', lastMonthStr).lt('tanggal', currentMonthStr),
+    // Total pendapatan jimpitan APPROVED bulan ini vs bulan lalu
+    // FIX: schema 20 pakai enum 'APPROVED' (bukan 'ACC' — itu nama aksi, bukan status)
+    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'APPROVED').gte('tanggal', currentMonthStr),
+    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'APPROVED').gte('tanggal', lastMonthStr).lt('tanggal', currentMonthStr),
     // Count by status bulan ini
     admin.from('jimpitan_tagihan').select('id', { count: 'exact', head: true }).eq('status', 'LUNAS').eq('periode_bulan', currentMonthStr),
     admin.from('jimpitan_tagihan').select('id', { count: 'exact', head: true }).eq('status', 'CICIL').eq('periode_bulan', currentMonthStr),
     admin.from('jimpitan_tagihan').select('id', { count: 'exact', head: true }).eq('status', 'BELUM').eq('periode_bulan', currentMonthStr),
     admin.from('info_pengumuman').select('id', { count: 'exact', head: true }).eq('is_published', true),
     // Sesi jimpitan yang sudah disetujui (pembayaran terbaru)
+    // FIX: enum 'APPROVED' (bukan 'ACC')
     admin.from('jimpitan_sesi').select(`
       id, tanggal, total_pendapatan, status,
       profile:profiles!jimpitan_sesi_profile_id_petugas_fkey(nama_kk, login_id, blok, nomor_rumah)
-    `).eq('status', 'ACC').order('tanggal', { ascending: false }).limit(5),
-    admin.from('jimpitan_sesi').select('id', { count: 'exact', head: true }).eq('status', 'DRAFT'),
-    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'ACC').gte('tanggal', currentMonthStr),
+    `).eq('status', 'APPROVED').order('tanggal', { ascending: false }).limit(5),
+    // FIX: enum 'AKTIF' (bukan 'DRAFT' — aksi 'buat sesi' tulis 'AKTIF')
+    admin.from('jimpitan_sesi').select('id', { count: 'exact', head: true }).eq('status', 'AKTIF'),
+    // FIX: enum 'APPROVED' (bukan 'ACC')
+    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'APPROVED').gte('tanggal', currentMonthStr),
     // FIX timezone: pakai local-date formatter (lihat comment line 33-36 untuk penjelasan bug)
     admin.from('v_penjaga_efektif').select('tanggal, profile_efektif_id, nama_efektif, is_swapped, nama_asli, profile_asli_id, minggu_ke').gte('tanggal', `${_yyyy}-${_mm}-${String(today.getDate()).padStart(2, '0')}`).order('tanggal', { ascending: true }).limit(1).maybeSingle(),
     admin.rpc('is_jimpitan_window_open'),
+    // FIX Problem #5: Dana khusus aktif summary
+    admin.from('dana_khusus').select('id, judul, target_per_kk, is_wajib, tanggal_selesai').eq('is_active', true).order('tanggal_selesai', { ascending: true }).limit(3),
   ])
 
   const isJimpitanWindowOpen = !!jimpitanWindowRes.data
@@ -233,6 +241,55 @@ export default async function DashboardPage() {
           </Link>
         ))}
       </div>
+
+      {/* ====== DANA KHUSUS AKTIF (FIX Problem #5) ====== */}
+      {(danaKhususActiveRes.data?.length ?? 0) > 0 && (
+        <Card className="overflow-hidden border-0 shadow-md ring-1 ring-pink-200/60">
+          <div className="relative bg-gradient-to-r from-pink-50 via-rose-50 to-fuchsia-50 px-5 py-3 border-b border-pink-100">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <HeartHandshake className="w-4 h-4 text-pink-600" />
+                <span className="text-[10px] font-bold uppercase tracking-widest text-pink-700">
+                  Dana Khusus Aktif
+                </span>
+              </div>
+              <Link href="/dashboard/dana-khusus" className="text-[10px] text-pink-700 hover:underline font-semibold">
+                Lihat semua →
+              </Link>
+            </div>
+          </div>
+          <CardContent className="p-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {(danaKhususActiveRes.data ?? []).map(d => {
+                const daysLeft = Math.ceil(
+                  (new Date(d.tanggal_selesai).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
+                )
+                return (
+                  <Link
+                    key={d.id}
+                    href={`/dashboard/dana-khusus/${d.id}`}
+                    className="flex items-center gap-2.5 p-3 rounded-xl bg-gradient-to-br from-white to-pink-50/50 border border-pink-100 hover:border-pink-300 hover:shadow-md transition-all group"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pink-500 to-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                      <HeartHandshake className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-sm truncate">{d.judul}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {d.is_wajib ? 'Wajib' : 'Sukarela'} · Target {formatRupiah(d.target_per_kk)}/KK
+                      </p>
+                      <p className="text-[10px] text-pink-600 font-semibold">
+                        {daysLeft > 0 ? `${daysLeft} hari lagi` : 'Berakhir hari ini'}
+                      </p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-pink-400 group-hover:text-pink-700 group-hover:translate-x-0.5 transition-all" />
+                  </Link>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ====== RONDA & JIMPITAN ====== */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -40,12 +40,19 @@ export default async function WargaJimpitanPage({
     .select(`
       id, tanggal, status, total_nominal, jumlah_warga_bayar, jumlah_penjaga_hadir,
       kelompok_id, keadaan, catatan, nama_inputter_snapshot, blok_inputter_snapshot,
-      input_by, waktu_mulai, waktu_submit
+      input_by, waktu_mulai, waktu_submit, approved_at, approved_by,
+      approver:profiles!jimpitan_sesi_approved_by_fkey(id, nama_kk, role)
     `)
     .eq('id', id)
     .single()
 
   if (error || !sesi) notFound()
+
+  // Siapkan info approver (untuk warga juga boleh lihat "Siapa yg ACC")
+  type ApproverRel = { id: string; nama_kk: string; role: string } | { id: string; nama_kk: string; role: string }[] | null
+  const approverRaw = (sesi as { approver?: ApproverRel }).approver
+  const approverObj = Array.isArray(approverRaw) ? approverRaw[0] : approverRaw
+  const approvedByName = approverObj?.nama_kk ?? null
 
   // Authorization: warga hanya boleh akses jika dia inputter ATAU sesi masih AKTIF (bisa lihat tapi tidak input)
   // (cek dilakukan di action handlers)
@@ -190,6 +197,10 @@ export default async function WargaJimpitanPage({
         anggotaKelompok={anggotaKelompok}
         keadaan={sesi.keadaan}
         catatan={sesi.catatan}
+        approvedByName={approvedByName}
+        approvedAt={sesi.approved_at}
+        currentUserRole={profile.role ?? 'WARGA'}
+        currentUserName={profile.nama_kk ?? null}
       />
     </div>
   )

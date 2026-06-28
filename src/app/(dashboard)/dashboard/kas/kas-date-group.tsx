@@ -134,8 +134,19 @@ export function KasDateGroup({
           <p className="text-[12px] font-bold text-slate-800">
             {fmtDate(tanggal)}
           </p>
-          <p className="text-[10px] text-muted-foreground">
-            {items.length} transaksi · Saldo akhir: <span className={`font-bold ${saldoAkhir >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{formatRupiah(saldoAkhir)}</span>
+          <p className="text-[10px] text-muted-foreground leading-tight">
+            {items.length} transaksi ·{' '}
+            <span className="font-semibold text-emerald-700">
+              +{formatRupiah(dayMasuk)}
+            </span>{' '}
+            /{' '}
+            <span className="font-semibold text-rose-700">
+              −{formatRupiah(dayKeluar)}
+            </span>{' '}
+            · Saldo:{' '}
+            <span className={`font-bold ${saldoAkhir >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+              {formatRupiah(saldoAkhir)}
+            </span>
           </p>
         </div>
         {open ? (

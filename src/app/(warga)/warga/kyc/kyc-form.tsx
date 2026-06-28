@@ -69,7 +69,12 @@ export function KycForm({
     /^(08|62|\\+62)[0-9]{8,12}$/.test(data.noWa.replace(/\D/g, '').replace(/^0/, '62').replace(/^\\+/, ''))
 
   const step2Valid = true  // KK data opsional
-  const step3Valid = ktpImage?.ok && kkImage?.ok
+  // Image hanya jadi WARNING, tidak block submit. Gambar tetap dikirim via WA.
+  // ok = false hanya untuk HARD ERROR (format file, file terlalu besar/kecil)
+  // ok = true dengan hasWarnings = true → user bisa tetap submit
+  // Kita tetap butuh image untuk preview, jadi require minimal ada image
+  const hasBothImages = ktpImage !== null && kkImage !== null
+  const step3Valid = hasBothImages && ktpImage?.ok !== false && kkImage?.ok !== false
 
   // ============================================
   // HANDLERS
@@ -92,10 +97,14 @@ export function KycForm({
       })
       toast.dismiss('img-qc')
       setter(result)
-      if (result.ok) {
-        toast.success('Kualitas gambar baik ✓')
-      } else {
+      if (!result.ok) {
+        // Hard error: format file / size
         toast.error(result.message)
+      } else if (result.hasWarnings) {
+        // Soft warning: kualitas kurang, tapi tetap bisa lanjut
+        toast.warning(result.message, { duration: 4000 })
+      } else {
+        toast.success('Kualitas gambar baik ✓')
       }
     } catch (err) {
       toast.dismiss('img-qc')
@@ -414,6 +423,9 @@ export function KycForm({
                   <li>Cahaya cukup, tidak silau</li>
                   <li>Letakkan di alas gelap/kontras</li>
                 </ul>
+                <p className="mt-1.5 text-[10px] text-blue-700 italic">
+                  💡 Catatan: Foto dengan kualitas kurang tetap bisa dikirim. Yang penting dokumen terbaca.
+                </p>
               </div>
             </div>
           </div>
@@ -523,15 +535,20 @@ function ImageDropzone({
   const inputRef = useRef<HTMLInputElement>(null)
 
   if (result) {
+    const isWarning = result.ok && result.hasWarnings  // ok tapi ada warning (tidak block)
+    const isError = !result.ok  // hard error (block submit)
     return (
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-xs font-semibold text-slate-700">{label}</p>
-          <Badge className={result.ok
-            ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100'
-            : 'bg-red-100 text-red-700 hover:bg-red-100'
+          <Badge className={
+            isError
+              ? 'bg-red-100 text-red-700 hover:bg-red-100'
+              : isWarning
+              ? 'bg-amber-100 text-amber-700 hover:bg-amber-100'
+              : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100'
           }>
-            {result.ok ? '✓ Bagus' : '⚠ Bermasalah'}
+            {isError ? '⚠ Tidak bisa' : isWarning ? '⚠ Ada catatan' : '✓ Bagus'}
           </Badge>
         </div>
         <div className="relative rounded-xl overflow-hidden border-2 border-slate-200 bg-slate-50">
@@ -549,7 +566,9 @@ function ImageDropzone({
             <X className="w-4 h-4" />
           </button>
         </div>
-        <p className={`text-[10px] ${result.ok ? 'text-emerald-700' : 'text-red-600'}`}>
+        <p className={`text-[10px] ${
+          isError ? 'text-red-600' : isWarning ? 'text-amber-700' : 'text-emerald-700'
+        }`}>
           {result.message}
         </p>
       </div>
@@ -574,7 +593,7 @@ function ImageDropzone({
           <>
             <ImageIcon className="w-6 h-6 text-slate-400 mx-auto mb-1.5" />
             <p className="text-xs font-semibold text-slate-700">Ketuk untuk pilih foto</p>
-            <p className="text-[10px] text-slate-500 mt-0.5">JPG/PNG/WebP, min 800x500</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">JPG/PNG/WebP, max 10MB</p>
           </>
         )}
       </button>

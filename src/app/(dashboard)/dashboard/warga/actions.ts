@@ -37,7 +37,7 @@ export async function tambahWarga(
   if (!/^\d{6}$/.test(pinAwal)) {
     return { error: 'PIN awal harus 6 digit angka' }
   }
-  if (!['NORMAL', 'JANDA'].includes(kategoriTarif)) {
+  if (!['NORMAL', 'KHUSUS'].includes(kategoriTarif)) {
     return { error: 'Kategori tarif tidak valid' }
   }
 
@@ -107,13 +107,22 @@ export async function editWarga(
 
   if (!id) return { error: 'ID warga tidak valid' }
   if (!namaKK) return { error: 'Nama Kepala Keluarga wajib diisi' }
-  if (!['NORMAL', 'JANDA'].includes(kategoriTarif)) {
+  if (!['NORMAL', 'KHUSUS'].includes(kategoriTarif)) {
     return { error: 'Kategori tarif tidak valid' }
   }
 
   const noHpNorm = noHp ? noHp.replace(/\D/g, '').replace(/^0/, '62') : null
 
   const admin = createAdminClient()
+
+  // Ambil kategori_tarif lama SEBELUM update, untuk propagate perubahan
+  const { data: oldProfile } = await admin
+    .from('profiles')
+    .select('kategori_tarif')
+    .eq('id', id)
+    .single()
+
+  const oldKategori = oldProfile?.kategori_tarif ?? 'NORMAL'
 
   const { error } = await admin
     .from('profiles')
@@ -129,8 +138,78 @@ export async function editWarga(
     return { error: 'Gagal update: ' + error.message }
   }
 
+  // SELALU cek tagihan & sinkronkan (idempotent), bukan cuma saat ganti kategori.
+  // Ini untuk handle kasus: warga ditandai KHUSUS tapi tagihan lama masih nominal Normal,
+  // sehingga saat ini user re-save, tagihan ikut ter-update.
+  const propagated = await propagateKategoriTarifToTagihan(admin, id, kategoriTarif)
+
   revalidatePath('/dashboard/warga')
+  revalidatePath('/dashboard/dana-khusus')
+  revalidatePath('/warga/dana-khusus')
+
+  if (propagated > 0) {
+    return {
+      success: `Data warga diperbarui. ${propagated} tagihan dana khusus disesuaikan ke tarif ${kategoriTarif === 'KHUSUS' ? 'Khusus' : 'Normal'}.`,
+    }
+  }
   return { success: 'Data warga berhasil diperbarui' }
+}
+
+/**
+ * Update nominal_tagihan untuk profile tertentu di semua dana_khusus aktif
+ * yang belum dibayar (total_terbayar = 0).
+ *
+ * KHUSUS → pakai target_per_kk_khusus (fallback ke target_per_kk kalau NULL/sama)
+ * NORMAL → pakai target_per_kk
+ *
+ * Tagihan yang sudah bayar sebagian/lunas/lebih TIDAK diubah.
+ */
+async function propagateKategoriTarifToTagihan(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  profileId: string,
+  newKategori: 'NORMAL' | 'KHUSUS'
+): Promise<number> {
+  // Ambil semua dana_khusus aktif + target amounts
+  const { data: danaList } = await admin
+    .from('dana_khusus')
+    .select('id, target_per_kk, target_per_kk_khusus')
+    .eq('is_active', true)
+
+  if (!danaList || danaList.length === 0) return 0
+
+  // Ambil tagihan profile ini yang belum dibayar
+  const danaIds = danaList.map((d: { id: string }) => d.id)
+  const { data: tagihanRows } = await admin
+    .from('dana_khusus_tagihan')
+    .select('id, dana_khusus_id, nominal_tagihan')
+    .eq('profile_id', profileId)
+    .in('dana_khusus_id', danaIds)
+    .eq('total_terbayar', 0)
+
+  if (!tagihanRows || tagihanRows.length === 0) return 0
+
+  // Hitung nominal baru per tagihan, update satu-satu (idempotent)
+  let count = 0
+  for (const t of tagihanRows) {
+    const dk = danaList.find((d: { id: string }) => d.id === t.dana_khusus_id)
+    if (!dk) continue
+
+    const newNominal = newKategori === 'KHUSUS'
+      ? (dk.target_per_kk_khusus ?? dk.target_per_kk)
+      : dk.target_per_kk
+
+    // Skip kalau sudah sama (idempotent)
+    if (Number(t.nominal_tagihan) === Number(newNominal)) continue
+
+    const { error } = await admin
+      .from('dana_khusus_tagihan')
+      .update({ nominal_tagihan: newNominal, updated_at: new Date().toISOString() })
+      .eq('id', t.id)
+
+    if (!error) count++
+  }
+  return count
 }
 
 // =========================================================

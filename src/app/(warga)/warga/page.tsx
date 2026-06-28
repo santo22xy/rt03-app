@@ -7,7 +7,7 @@ import {
   Wallet, Megaphone, Receipt, 
   CheckCircle2, Clock, AlertCircle, 
   MessageCircle, MapPin, Sparkles, ChevronRight,
-  Shield, HandCoins,
+  Shield, HandCoins, HeartHandshake,
 } from 'lucide-react'
 import { formatTanggal } from '@/lib/format'
 import { CollapsibleCard } from './_components/CollapsibleCard'
@@ -61,6 +61,25 @@ export default async function WargaHomePage() {
     .order('published_at', { ascending: false })
     .limit(3)
 
+  // Ambil data dana khusus aktif + tagihan user ini
+  const { data: danaKhususList } = await admin
+    .from('dana_khusus')
+    .select('id, judul, kategori, target_per_kk, is_wajib, tanggal_selesai')
+    .eq('is_active', true)
+    .order('tanggal_selesai', { ascending: true })
+
+  const { data: danaTagihanUser } = await admin
+    .from('dana_khusus_tagihan')
+    .select('dana_khusus_id, nominal_tagihan, total_terbayar, status')
+    .eq('profile_id', profileId)
+
+  const danaTagihanMap = new Map((danaTagihanUser ?? []).map(t => [t.dana_khusus_id, t]))
+  const danaBelumLunas = (danaKhususList ?? [])
+    .filter(d => {
+      const t = danaTagihanMap.get(d.id)
+      return t && (t.status === 'BELUM' || t.status === 'CICIL')
+    })
+
   // Cek window jimpitan + next jadwal
   const { data: isJimpitanOpen } = await admin.rpc('is_jimpitan_window_open')
   // FIX timezone: pakai local-date formatter (lihat dashboard/page.tsx untuk penjelasan bug)
@@ -76,9 +95,9 @@ export default async function WargaHomePage() {
     .maybeSingle()
 
   const initial = profile.nama_kk?.[0]?.toUpperCase() ?? '?'
-  // Iuran bulanan: NORMAL = 15rb, JANDA = 10rb (langsung nominal, tanpa label kategori)
-  const iuranNominal = profile.kategori_tarif === 'JANDA' ? 10000 : 15000
-  const iuranColor = profile.kategori_tarif === 'JANDA'
+  // Iuran bulanan: NORMAL = 15rb, KHUSUS = 10rb (langsung nominal, tanpa label kategori)
+  const iuranNominal = profile.kategori_tarif === 'KHUSUS' ? 10000 : 15000
+  const iuranColor = profile.kategori_tarif === 'KHUSUS'
     ? 'bg-purple-100 text-purple-700 border-purple-200'
     : 'bg-emerald-100 text-emerald-700 border-emerald-200'
 
@@ -319,6 +338,52 @@ export default async function WargaHomePage() {
       {/* ============================================ */}
       {/* PENGUMUMAN TERBARU (Collapsible) */}
       {/* ============================================ */}
+      {danaBelumLunas.length > 0 && (
+        <CollapsibleCard
+          label="Pengumpulan Khusus"
+          title={`${danaBelumLunas.length} Dana Khusus Aktif`}
+          icon={<HeartHandshake className="w-4 h-4" />}
+          iconBgClass="bg-pink-100"
+          defaultOpen={true}
+        >
+          <div className="space-y-2">
+            {danaBelumLunas.slice(0, 3).map(d => {
+              const t = danaTagihanMap.get(d.id)
+              if (!t) return null
+              const sisa = t.nominal_tagihan - t.total_terbayar
+              const pct = t.nominal_tagihan > 0
+                ? Math.round(100 * t.total_terbayar / t.nominal_tagihan)
+                : 0
+              return (
+                <Link
+                  key={d.id}
+                  href="/warga/dana-khusus"
+                  className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-br from-pink-50 to-rose-50 border border-pink-100 hover:border-pink-300 transition-colors group"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pink-500 to-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <HeartHandshake className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-sm truncate">{d.judul}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <Badge className={`text-[9px] px-1 py-0 ${
+                        t.status === 'CICIL' ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'
+                      }`}>
+                        {t.status}
+                      </Badge>
+                      <p className="text-[10px] text-muted-foreground">
+                        Sisa Rp {sisa.toLocaleString('id-ID')} ({pct}%)
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-pink-400 group-hover:translate-x-0.5 transition-transform" />
+                </Link>
+              )
+            })}
+          </div>
+        </CollapsibleCard>
+      )}
+
       <CollapsibleCard
         label="Informasi RT"
         title="Pengumuman Terbaru"

@@ -29,7 +29,7 @@ import {
 import {
   Plus, Search, MoreVertical, Pencil, KeyRound, Users,
   Power, PowerOff, Loader2, Eye, EyeOff, MessageCircle, Trash2,
-  Building2, Shield, ShieldCheck,
+  Building2, Shield, ShieldCheck, Crown,
 } from 'lucide-react'
 import { formatTanggal } from '@/lib/format'
 import { toast } from 'sonner'
@@ -98,6 +98,26 @@ const ROLE_LABEL: Record<string, string> = {
   PENGURUS: 'Pengurus',
   WARGA: 'Warga',
 }
+
+// Role order untuk sort pengurus (Ketua RT paling atas)
+const ROLE_ORDER: Record<string, number> = {
+  KETUA_RT: 1,
+  BENDAHARA: 2,
+  SEKRETARIS: 3,
+  PENGURUS: 4,
+  SUPERADMIN: 5,
+  WARGA: 99,
+}
+
+// Badge styling khusus per role (tersedia untuk dipakai saat butuh)
+const ROLE_BADGE: Record<string, string> = {
+  KETUA_RT: 'bg-amber-100 text-amber-800 border-amber-300 font-bold',
+  BENDAHARA: 'bg-emerald-100 text-emerald-800 border-emerald-300 font-bold',
+  SEKRETARIS: 'bg-blue-100 text-blue-800 border-blue-300 font-bold',
+  PENGURUS: 'bg-purple-100 text-purple-800 border-purple-300 font-bold',
+  SUPERADMIN: 'bg-rose-100 text-rose-800 border-rose-300 font-bold',
+}
+void ROLE_BADGE  // silence unused warning — exported untuk reuse
 
 interface WargaClientProps {
   warga: Profile[]
@@ -418,8 +438,8 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                         <span className="font-semibold ml-1">{w.nomor_rumah}</span>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={w.kategori_tarif === 'JANDA' ? 'secondary' : 'outline'} className="text-xs">
-                          {w.kategori_tarif === 'JANDA' ? 'Janda' : 'Normal'}
+                        <Badge variant={w.kategori_tarif === 'KHUSUS' ? 'secondary' : 'outline'} className="text-xs">
+                          {w.kategori_tarif === 'KHUSUS' ? 'Khusus' : 'Normal'}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-xs">
@@ -446,7 +466,10 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
-                          <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="h-8 w-8" />}>
+                          <DropdownMenuTrigger
+                            aria-label="Menu aksi"
+                            className="inline-flex items-center justify-center h-8 w-8 rounded-lg hover:bg-muted focus:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                          >
                             <MoreVertical className="w-4 h-4" />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
@@ -510,8 +533,8 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                     )}
                   </div>
                   <div className="flex items-center gap-1.5 mt-1">
-                    <Badge variant={w.kategori_tarif === 'JANDA' ? 'secondary' : 'outline'} className="text-[9px] px-1.5 py-0">
-                      {w.kategori_tarif === 'JANDA' ? 'Janda 10rb' : 'Normal 15rb'}
+                    <Badge variant={w.kategori_tarif === 'KHUSUS' ? 'secondary' : 'outline'} className="text-[9px] px-1.5 py-0">
+                      {w.kategori_tarif === 'KHUSUS' ? 'Khusus 10rb' : 'Normal 15rb'}
                     </Badge>
                     {w.no_hp && (
                       <a
@@ -527,9 +550,12 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                   </div>
                 </div>
                 <DropdownMenu>
-                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label="Menu aksi" />}>
-                          <MoreVertical className="w-3.5 h-3.5" />
-                        </DropdownMenuTrigger>
+                  <DropdownMenuTrigger
+                    aria-label="Menu aksi"
+                    className="inline-flex items-center justify-center h-7 w-7 rounded-lg hover:bg-muted focus:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors shrink-0"
+                  >
+                    <MoreVertical className="w-3.5 h-3.5" />
+                  </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-48">
                     <DropdownMenuItem onClick={() => setEditTarget(w)}>
                       <Pencil className="w-4 h-4" /> Edit
@@ -559,38 +585,79 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
       </div>
 
       {/* Pengurus Section */}
-      {pengurus.length > 0 && (
+      {pengurus.length > 0 && (() => {
+        // Sort pengurus by ROLE_ORDER (Ketua RT paling atas), lalu by login_id
+        const sortedPengurus = [...pengurus].sort((a, b) => {
+          const ao = ROLE_ORDER[a.role] ?? 99
+          const bo = ROLE_ORDER[b.role] ?? 99
+          if (ao !== bo) return ao - bo
+          return (a.login_id ?? '').localeCompare(b.login_id ?? '')
+        })
+        const ketuaRT = sortedPengurus.find(p => p.role === 'KETUA_RT')
+
+        return (
         <Card className="border-0 shadow-md mt-10">
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle className="text-base flex items-center justify-center gap-2">
               <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
                 <Shield className="w-4 h-4 text-white" />
               </div>
-              Pengurus RT ({pengurus.length})
+              Pengurus RT ({sortedPengurus.length})
             </CardTitle>
             <CardDescription>
               Akun dengan akses dashboard pengurus. Klik ⋮ untuk reset PIN atau edit.
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {pengurus.map((p, i) => {
-                const gradients = [
-                  'from-amber-500 to-orange-500',
-                  'from-blue-500 to-indigo-500',
-                  'from-emerald-500 to-teal-500',
-                  'from-purple-500 to-fuchsia-500',
-                  'from-rose-500 to-pink-500',
-                ]
-                const gradient = gradients[i % gradients.length]
+          <CardContent className="pb-6">
+            {/* Highlight Pak RT kalau ada */}
+            {ketuaRT && (
+              <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-amber-50 to-yellow-50 border-2 border-amber-300 flex items-center gap-3 shadow-sm">
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-white flex items-center justify-center shrink-0 ring-2 ring-amber-300 shadow-md">
+                  <Crown className="w-6 h-6" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-[9px] font-bold uppercase tracking-wider text-amber-700">
+                      👑 Pak RT
+                    </p>
+                    <Badge className="bg-amber-500 text-white hover:bg-amber-500 text-[9px] font-bold">
+                      Aktif
+                    </Badge>
+                  </div>
+                  <p className="font-bold text-base text-amber-900 leading-tight truncate mt-0.5">
+                    {ketuaRT.nama_kk}
+                  </p>
+                  <p className="text-[11px] text-amber-700">
+                    Blok {ketuaRT.blok} No. {ketuaRT.nomor_rumah} · Login ID {ketuaRT.login_id}
+                  </p>
+                </div>
+                <Badge className="bg-amber-500 text-white hover:bg-amber-500 font-bold text-[10px] shrink-0">
+                  KETUA RT
+                </Badge>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 px-2 pt-1">
+              {sortedPengurus.map((p, i) => {
+                const isKetua = p.role === 'KETUA_RT'
+                const gradients = isKetua
+                  ? ['from-amber-500 via-amber-600 to-orange-600']
+                  : [
+                      'from-blue-500 to-indigo-500',
+                      'from-emerald-500 to-teal-500',
+                      'from-purple-500 to-fuchsia-500',
+                      'from-rose-500 to-pink-500',
+                      'from-slate-500 to-slate-600',
+                    ]
+                const gradient = isKetua ? gradients[0] : gradients[i % gradients.length]
                 return (
-                  <div key={p.id} className="relative overflow-hidden border-0 rounded-xl bg-gradient-to-br text-white p-3 flex items-center gap-3 shadow-md group"
+                  <div key={p.id} className="relative overflow-hidden border-0 rounded-xl text-white p-3 flex items-center gap-3 shadow-md group"
                     style={{ backgroundImage: undefined }}
                   >
                     <div className={`absolute inset-0 bg-gradient-to-br ${gradient} opacity-90`} />
                     <div className="relative flex items-center gap-3 w-full">
                       <div className="w-10 h-10 rounded-full bg-white/20 backdrop-blur-sm ring-2 ring-white/30 flex items-center justify-center font-bold shrink-0">
-                        {p.nama_kk?.[0]?.toUpperCase() ?? '?'}
+                        {isKetua ? <Crown className="w-5 h-5" /> : (p.nama_kk?.[0]?.toUpperCase() ?? '?')}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold truncate">{p.nama_kk}</p>
@@ -598,13 +665,20 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                           {ROLE_LABEL[p.role] ?? p.role} · {p.blok}{p.nomor_rumah}
                         </p>
                       </div>
-                      <Badge variant={p.is_active ? 'default' : 'secondary'} className="text-xs bg-white/20 text-white border-white/30 backdrop-blur-sm shrink-0">
+                      <Badge className={`text-[10px] shrink-0 border ${
+                        isKetua
+                          ? 'bg-white text-amber-700 hover:bg-white border-white font-bold'
+                          : 'bg-white/20 text-white border-white/30 backdrop-blur-sm'
+                      }`}>
                         {p.is_active ? 'Aktif' : 'Off'}
                       </Badge>
                       <DropdownMenu>
-                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/20 hover:text-white shrink-0" />}>
-                          <MoreVertical className="w-4 h-4" />
-                        </DropdownMenuTrigger>
+                      <DropdownMenuTrigger
+                        aria-label="Menu aksi"
+                        className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-white hover:bg-white/20 focus:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 transition-colors shrink-0"
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                      </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48">
                           <DropdownMenuItem onClick={() => setEditTarget(p)}>
                             <Pencil className="w-4 h-4" /> Edit Data
@@ -640,7 +714,8 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
             </div>
           </CardContent>
         </Card>
-      )}
+        )
+      })()}
 
       {/* Dialog: Tambah Warga */}
       <Dialog open={tambahOpen} onOpenChange={setTambahOpen}>
@@ -679,7 +754,7 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                 <select name="kategoriTarif" defaultValue="NORMAL"
                   className="w-full h-10 rounded-md border border-input bg-background px-2 text-sm">
                   <option value="NORMAL">Normal (15rb)</option>
-                  <option value="JANDA">Janda (10rb)</option>
+                  <option value="KHUSUS">Khusus (10rb)</option>
                 </select>
               </div>
               <div className="space-y-1">
@@ -721,7 +796,7 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                 <select name="kategoriTarif" defaultValue={editTarget.kategori_tarif}
                   className="w-full h-10 rounded-md border border-input bg-background px-2 text-sm">
                   <option value="NORMAL">Normal</option>
-                  <option value="JANDA">Janda</option>
+                  <option value="KHUSUS">Khusus</option>
                 </select>
               </div>
               <label className="flex items-center gap-2 text-sm">

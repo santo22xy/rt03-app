@@ -6,6 +6,7 @@ import { HandCoins, ArrowRight, CheckCircle2, Clock, ShieldAlert, Calendar } fro
 import { formatRupiah, formatTanggal } from '@/lib/format'
 import { getNextSaturdays } from '@/lib/ronda'
 import { BuatSesiForm } from './buat-sesi-form'
+import { PendingAccList } from './pending-acc-list'
 
 export const dynamic = 'force-dynamic'
 
@@ -149,6 +150,15 @@ export default async function JimpitanListPage() {
           </p>
         </CardContent>
       </Card>
+
+      {/* Panel Pending ACC untuk Bendahara — di atas history supaya sangat terlihat */}
+      {profile && (
+        <PendingAccList
+          sesiList={(sesi ?? []).filter((s) => s.status === 'SUBMITTED')}
+          currentUserRole={profile.role}
+          currentUserName={profile.nama_kk}
+        />
+      )}
 
       {/* List Sesi */}
       <div>

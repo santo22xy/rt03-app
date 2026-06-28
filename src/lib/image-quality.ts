@@ -2,42 +2,60 @@
  * Image quality check untuk KYC (KTP/KK).
  * Semua proses di client-side (browser), tidak ada upload.
  *
- * Check yang dilakukan:
- * 1. Resolusi minimal (800x500)
- * 2. Ukuran file (50KB - 5MB)
- * 3. Blur detection (Laplacian variance)
- * 4. Brightness (mean luminance)
- * 5. EXIF orientation (auto-rotate)
+ * Photo HANYA untuk preview di HP user, lalu di-attach manual
+ * di WhatsApp. Jadi validasi kualitas HANYA warning, tidak
+ * block submit (kecuali hard error: format file / size).
+ *
+ * HARD ERROR (block submit):
+ *   - Bukan file image
+ *   - Format tidak didukung (bukan jpg/png/webp/heic/heif)
+ *   - File > 10MB
+ *   - File < 20KB
+ *
+ * WARNING (tidak block, hanya info):
+ *   - Resolusi < 600x400 (KTP/KK scan bisa kecil)
+ *   - Blur (Laplacian variance < 30)
+ *   - Terlalu gelap (< 15) atau terlalu terang (> 240)
+ *
+ * Check:
+ * 1. Format file (HARD)
+ * 2. Ukuran file 20KB - 10MB (HARD)
+ * 3. Resolusi minimal 600x400 (WARNING)
+ * 4. Blur detection (WARNING)
+ * 5. Brightness (WARNING)
+ * 6. EXIF orientation (auto-rotate, internal)
  */
 
 export type ImageQualityIssue =
-  | 'TOO_SMALL'      // resolusi < 800x500
-  | 'TOO_LARGE'      // file > 5MB
+  | 'TOO_SMALL'      // resolusi < 600x400
+  | 'TOO_LARGE'      // file > 10MB
   | 'TOO_BLURRY'     // Laplacian variance < threshold
-  | 'TOO_DARK'       // mean luminance < 30
-  | 'TOO_BRIGHT'     // mean luminance > 225
+  | 'TOO_DARK'       // mean luminance < 15
+  | 'TOO_BRIGHT'     // mean luminance > 240
   | 'WRONG_FORMAT'   // bukan jpg/png/webp
   | 'NOT_IMAGE'      // file bukan image
 
 export interface ImageQualityResult {
   ok: boolean
+  hasWarnings: boolean          // true kalau ada warning tapi masih ok (tidak block submit)
   width: number
   height: number
   fileSize: number          // bytes
   blurScore: number         // 0-100, higher = sharper
   brightness: number        // 0-255, mean luminance
   issues: ImageQualityIssue[]
+  warnings: ImageQualityIssue[]   // warning vs error
   message: string           // human-readable summary
   dataUrl: string           // base64 data URL (untuk preview)
 }
 
-const MIN_WIDTH = 800
-const MIN_HEIGHT = 500
-const MAX_FILE_SIZE = 5 * 1024 * 1024  // 5MB
-const MIN_FILE_SIZE = 50 * 1024        // 50KB (terlalu kecil = kemungkinan blur)
-const BLUR_THRESHOLD = 100             // Laplacian variance minimum
-const BRIGHTNESS_MIN = 30              // terlalu gelap
-const BRIGHTNESS_MAX = 225             // terlalu terang
+const MIN_WIDTH = 600
+const MIN_HEIGHT = 400
+const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
+const MIN_FILE_SIZE = 20 * 1024        // 20KB (terlalu kecil = kemungkinan blur)
+const BLUR_THRESHOLD = 30              // Laplacian variance minimum (lebih longgar)
+const BRIGHTNESS_MIN = 15              // terlalu gelap (lebih longgar)
+const BRIGHTNESS_MAX = 240             // terlalu terang (lebih longgar)
 const ALLOWED_FORMATS = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
 
 /**
@@ -52,7 +70,7 @@ export async function checkImageQuality(
 ): Promise<ImageQualityResult> {
   const { onProgress } = opts
 
-  // 1. Validasi format & size
+  // 1. Validasi format & size — INI ADALAH HARD ERROR (block submit)
   if (!file.type.startsWith('image/')) {
     return emptyResult(file, ['NOT_IMAGE'], 'File bukan gambar')
   }
@@ -60,7 +78,7 @@ export async function checkImageQuality(
     return emptyResult(file, ['WRONG_FORMAT'], `Format ${file.type} tidak didukung. Gunakan JPG/PNG/WebP`)
   }
   if (file.size > MAX_FILE_SIZE) {
-    return emptyResult(file, ['TOO_LARGE'], `File terlalu besar (${formatBytes(file.size)}). Maksimal 5MB`)
+    return emptyResult(file, ['TOO_LARGE'], `File terlalu besar (${formatBytes(file.size)}). Maksimal 10MB`)
   }
   if (file.size < MIN_FILE_SIZE) {
     return emptyResult(file, ['TOO_SMALL'], `File terlalu kecil (${formatBytes(file.size)}). Foto mungkin blur`)
@@ -76,39 +94,49 @@ export async function checkImageQuality(
   onProgress?.('Mengecek kualitas...')
   const { canvas, width, height } = drawWithOrientation(img)
 
-  // 4. Resolusi check
+  // 4. Resolusi check — ini WARNING, tidak block submit
+  // Foto dari HP sekarang minimal 1080px, tapi KTP/KK hasil scan
+  // dari kamera lain bisa lebih kecil. Kita longgarkan.
   const issues: ImageQualityIssue[] = []
+  const warnings: ImageQualityIssue[] = []
   if (width < MIN_WIDTH || height < MIN_HEIGHT) {
-    issues.push('TOO_SMALL')
+    warnings.push('TOO_SMALL')
   }
 
-  // 5. Brightness (mean luminance)
+  // 5. Brightness (mean luminance) — WARNING
   const brightness = computeBrightness(canvas)
   if (brightness < BRIGHTNESS_MIN) {
-    issues.push('TOO_DARK')
+    warnings.push('TOO_DARK')
   } else if (brightness > BRIGHTNESS_MAX) {
-    issues.push('TOO_BRIGHT')
+    warnings.push('TOO_BRIGHT')
   }
 
-  // 6. Blur detection (Laplacian variance)
+  // 6. Blur detection (Laplacian variance) — WARNING
   const blurScore = computeBlurScore(canvas)
   if (blurScore < BLUR_THRESHOLD) {
-    issues.push('TOO_BLURRY')
+    warnings.push('TOO_BLURRY')
   }
 
+  // ok = true kalau tidak ada HARD ERROR (file format, size, dll)
+  // hasWarnings = true kalau ada warning kualitas
   const ok = issues.length === 0
-  const message = ok
+  const hasWarnings = warnings.length > 0
+  const message = ok && !hasWarnings
     ? 'Kualitas gambar baik ✓'
+    : ok
+    ? 'Foto diterima. ' + issuesToMessage(warnings)
     : issuesToMessage(issues)
 
   return {
     ok,
+    hasWarnings,
     width,
     height,
     fileSize: file.size,
     blurScore,
     brightness,
     issues,
+    warnings,
     message,
     dataUrl,
   }
@@ -125,12 +153,14 @@ function emptyResult(
 ): ImageQualityResult {
   return {
     ok: false,
+    hasWarnings: false,
     width: 0,
     height: 0,
     fileSize: file.size,
     blurScore: 0,
     brightness: 0,
     issues,
+    warnings: [],
     message,
     dataUrl: '',
   }
@@ -311,19 +341,19 @@ function issuesToMessage(issues: ImageQualityIssue[]): string {
   for (const issue of issues) {
     switch (issue) {
       case 'TOO_SMALL':
-        messages.push('Resolusi terlalu kecil (min 800x500px)')
+        messages.push('Resolusi kecil (min 600x400px), tetapi tetap diterima')
         break
       case 'TOO_LARGE':
-        messages.push('File terlalu besar (max 5MB)')
+        messages.push('File terlalu besar (max 10MB)')
         break
       case 'TOO_BLURRY':
-        messages.push('Gambar blur, mohon foto ulang lebih fokus')
+        messages.push('Gambar agak blur, tetapi tetap diterima')
         break
       case 'TOO_DARK':
-        messages.push('Gambar terlalu gelap, mohon pencahayaan lebih')
+        messages.push('Gambar agak gelap, tetapi tetap diterima')
         break
       case 'TOO_BRIGHT':
-        messages.push('Gambar terlalu terang, hindari flash/sinar langsung')
+        messages.push('Gambar agak terang, tetapi tetap diterima')
         break
     }
   }

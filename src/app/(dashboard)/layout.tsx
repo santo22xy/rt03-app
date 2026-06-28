@@ -14,6 +14,9 @@ import {
   ShieldCheck,
   HandCoins,
   Smartphone,
+  Crown,
+  Coins,
+  HeartHandshake,
 } from 'lucide-react'
 import { logout } from '../(auth)/login/actions'
 import { BottomNavPengurus } from './dashboard/bottom-nav-pengurus'
@@ -67,9 +70,45 @@ export default async function DashboardLayout({
     { href: '/dashboard/iuran', label: 'Iuran Bulanan', icon: Wallet },
     { href: '/dashboard/kas', label: 'Kas & Transaksi', icon: Receipt },
     { href: '/dashboard/jimpitan', label: 'Jimpitan', icon: HandCoins },
+    { href: '/dashboard/dana-khusus', label: 'Dana Khusus', icon: HeartHandshake },
     { href: '/dashboard/pengumuman', label: 'Pengumuman', icon: Megaphone },
     { href: '/dashboard/ronda', label: 'Jadwal Ronda', icon: Calendar },
-  ]
+  ] as const
+
+  // FIX Problem #1: Pak RT role lebih prominent dengan icon crown
+  const roleStyle: Record<string, { label: string; className: string; icon: typeof Crown }> = {
+    KETUA_RT: {
+      label: 'Pak RT',
+      className: 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border-amber-600 hover:from-amber-500 hover:to-orange-500 shadow-sm font-bold',
+      icon: Crown,
+    },
+    BENDAHARA: {
+      label: 'Bendahara',
+      className: 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-600 shadow-sm font-semibold',
+      icon: Coins,
+    },
+    SEKRETARIS: {
+      label: 'Sekretaris',
+      className: 'bg-blue-600 text-white border-blue-700 hover:bg-blue-600 shadow-sm font-semibold',
+      icon: ShieldCheck,
+    },
+    PENGURUS: {
+      label: 'Pengurus',
+      className: 'bg-purple-600 text-white border-purple-700 hover:bg-purple-600 shadow-sm font-semibold',
+      icon: ShieldCheck,
+    },
+    SUPERADMIN: {
+      label: 'Superadmin',
+      className: 'bg-rose-600 text-white border-rose-700 hover:bg-rose-600 shadow-sm font-semibold',
+      icon: ShieldCheck,
+    },
+  }
+  const currentRole = roleStyle[profile.role] ?? {
+    label: roleLabel[profile.role] ?? profile.role,
+    className: 'bg-secondary text-secondary-foreground',
+    icon: ShieldCheck,
+  }
+  const RoleIcon = currentRole.icon
 
   return (
     <div className="min-h-screen flex bg-muted/30">
@@ -106,9 +145,10 @@ export default async function DashboardLayout({
             <p className="text-xs text-muted-foreground">
               Blok {profile.blok} No. {profile.nomor_rumah} · {profile.login_id}
             </p>
-            <div className="flex gap-1 mt-1.5">
-              <Badge variant="secondary" className="text-xs">
-                {roleLabel[profile.role] ?? profile.role}
+            <div className="flex gap-1 mt-1.5 flex-wrap">
+              <Badge className={`text-xs inline-flex items-center gap-1 ${currentRole.className}`}>
+                {profile.role === 'KETUA_RT' && <RoleIcon className="w-3 h-3" />}
+                {currentRole.label}
               </Badge>
               {/* Tanda pengurus juga warga */}
               <Link href="/warga" className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors" title="Buka tampilan warga (akun Anda sendiri)">
@@ -131,13 +171,23 @@ export default async function DashboardLayout({
         {/* TOPBAR Mobile - STICKY */}
         <header className="md:hidden sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-600 flex items-center justify-center shadow-md shadow-emerald-500/30">
-              <ShieldCheck className="w-4 h-4 text-white" />
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shadow-md shrink-0 ${
+              profile.role === 'KETUA_RT'
+                ? 'bg-gradient-to-br from-amber-500 via-amber-600 to-orange-600 shadow-amber-500/30'
+                : 'bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-600 shadow-emerald-500/30'
+            }`}>
+              {profile.role === 'KETUA_RT' ? (
+                <Crown className="w-4 h-4 text-white" />
+              ) : (
+                <ShieldCheck className="w-4 h-4 text-white" />
+              )}
             </div>
             <div>
               <p className="font-bold text-sm leading-tight">SENTRA RT 03</p>
-              <p className="text-[10px] text-muted-foreground leading-tight">
-                {roleLabel[profile.role] ?? 'Pengurus'}
+              <p className={`text-[10px] leading-tight font-semibold ${
+                profile.role === 'KETUA_RT' ? 'text-amber-700' : 'text-muted-foreground'
+              }`}>
+                {currentRole.label}
               </p>
             </div>
           </div>

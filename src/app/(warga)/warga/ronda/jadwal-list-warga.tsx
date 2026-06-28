@@ -91,15 +91,16 @@ export function JadwalListWarga({
                 <button
                   type="button"
                   onClick={() => setExpandedTgl(isExpanded ? null : j.tanggal)}
-                  className="text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg p-1.5 transition-colors"
-                  aria-label={isExpanded ? 'Sembunyikan anggota' : 'Lihat anggota'}
+                  className="shrink-0 inline-flex items-center gap-0.5 text-blue-600 active:text-blue-800 active:bg-blue-50 rounded-lg px-2 py-1.5 min-h-[36px] min-w-[36px] justify-center touch-manipulation"
+                  aria-label={isExpanded ? 'Sembunyikan anggota' : `Lihat ${otherAnggota.length} anggota`}
+                  aria-expanded={isExpanded}
                   title={`Lihat ${otherAnggota.length} anggota kelompok`}
                 >
                   <Users className="w-4 h-4" />
                   {isExpanded ? (
-                    <ChevronUp className="w-3 h-3 inline ml-0.5" />
+                    <ChevronUp className="w-3.5 h-3.5" />
                   ) : (
-                    <ChevronDown className="w-3 h-3 inline ml-0.5" />
+                    <ChevronDown className="w-3.5 h-3.5" />
                   )}
                 </button>
               )}
@@ -108,26 +109,24 @@ export function JadwalListWarga({
             {isExpanded && otherAnggota.length > 0 && (
               <div className="px-3 pb-3 pt-1 border-t border-slate-200/60 bg-slate-50/50">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600 mb-2">
-                  Anggota Kelompok {kelompokKey} ({anggota.length} orang)
+                  Daftar Petugas ({otherAnggota.length} orang)
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {anggota.map((a) => (
-                    <div
+                <ul className="space-y-1">
+                  {otherAnggota.map((a) => (
+                    <li
                       key={a.id}
                       className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg bg-white border border-slate-200/60"
                     >
-                      {a.role_kelompok === 'KETUA' ? (
-                        <Crown className="w-3 h-3 text-amber-500 shrink-0" />
-                      ) : (
-                        <Users className="w-3 h-3 text-slate-400 shrink-0" />
-                      )}
-                      <span className="font-medium truncate">{a.nama_kk_snapshot}</span>
-                      <span className="text-[10px] text-muted-foreground ml-auto">
+                      <Users className="w-3 h-3 text-slate-400 shrink-0" />
+                      <span className="font-medium truncate flex-1 min-w-0">
+                        {a.nama_kk_snapshot}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground shrink-0">
                         {a.login_id}
                       </span>
-                    </div>
+                    </li>
                   ))}
-                </div>
+                </ul>
               </div>
             )}
           </div>
