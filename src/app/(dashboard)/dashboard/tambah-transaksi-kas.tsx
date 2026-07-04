@@ -20,6 +20,7 @@ import {
   tambahTransaksiKas, getKasKategori,
   type KasKategori,
 } from './jimpitan-actions'
+import { getActiveDanaKhususAndProfiles } from './dana-khusus/dana-khusus-actions'
 import { KelolaKategoriDialog } from './kelola-kategori-dialog'
 
 type Tipe = 'MASUK' | 'KELUAR'
@@ -46,6 +47,11 @@ export function TambahTransaksiKas() {
 
   // Daftar kategori aktif dari DB
   const [kategoriList, setKategoriList] = useState<KasKategori[]>([])
+  const [danaKhususList, setDanaKhususList] = useState<any[]>([])
+  const [profilesList, setProfilesList] = useState<any[]>([])
+  const [selectedDanaKhusus, setSelectedDanaKhusus] = useState<string>('')
+  const [selectedBlok, setSelectedBlok] = useState<string>('')
+  const [selectedProfile, setSelectedProfile] = useState<string>('')
 
   // Load kategori saat dialog tambah dibuka
   async function loadKategori() {
@@ -56,6 +62,10 @@ export function TambahTransaksiKas() {
       const first = list.find((k) => k.tipe === tipe)
       if (first) setKategori(first.kode)
     }
+    // Load active dana khusus and profiles via server action
+    const { danaKhususList, profilesList } = await getActiveDanaKhususAndProfiles()
+    setDanaKhususList(danaKhususList || [])
+    setProfilesList(profilesList || [])
   }
 
   function reset() {
@@ -70,6 +80,9 @@ export function TambahTransaksiKas() {
     setSumberDana('KAS_RT')
     setDitalangiOleh('')
     setCatatan('')
+    setSelectedDanaKhusus('')
+    setSelectedBlok('')
+    setSelectedProfile('')
   }
 
   function handleTipeChange(next: Tipe) {
@@ -94,6 +107,7 @@ export function TambahTransaksiKas() {
   const kategoriFiltered = kategoriList
     .filter((k) => k.tipe === tipe)
     .sort((a, b) => a.urutan - b.urutan || a.label.localeCompare(b.label))
+  const selectedKategoriObj = kategoriList.find((k) => k.kode === kategori)
 
   function handleNominalChange(e: React.ChangeEvent<HTMLInputElement>) {
     const raw = e.target.value.replace(/[^0-9]/g, '')
@@ -142,6 +156,12 @@ export function TambahTransaksiKas() {
       }
     }
     if (catatan.trim()) fd.append('catatan', catatan.trim())
+
+    // For MERTI DUSUN
+    if (selectedKategoriObj?.label.toLowerCase().includes('merti')) {
+      fd.append('dana_khusus_id', selectedDanaKhusus)
+      fd.append('profile_id', selectedProfile)
+    }
 
     startTransition(async () => {
       const res = await tambahTransaksiKas(fd)
@@ -281,6 +301,76 @@ export function TambahTransaksiKas() {
               required
             />
           </div>
+
+          {/* MERTI DUSUN / DANA KHUSUS FIELDS */}
+          {selectedKategoriObj?.label.toLowerCase().includes('merti') && (
+            <>
+              <div>
+                <label htmlFor="danaKhusus" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">
+                  Pilih Dana Khusus
+                </label>
+                <select
+                  id="danaKhusus"
+                  value={selectedDanaKhusus}
+                  onChange={(e) => {
+                    setSelectedDanaKhusus(e.target.value)
+                    setSelectedBlok('')
+                    setSelectedProfile('')
+                  }}
+                  disabled={isPending}
+                  className="flex w-full h-10 items-center rounded-lg border border-input bg-background px-3 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  <option value="">Pilih dana khusus...</option>
+                  {danaKhususList.map(d => (
+                    <option key={d.id} value={d.id}>{d.judul}</option>
+                  ))}
+                </select>
+              </div>
+              {selectedDanaKhusus && (
+                <>
+                  <div>
+                    <label htmlFor="blok" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">
+                      Blok
+                    </label>
+                    <select
+                      id="blok"
+                      value={selectedBlok}
+                      onChange={(e) => {
+                        setSelectedBlok(e.target.value)
+                        setSelectedProfile('')
+                      }}
+                      disabled={isPending}
+                      className="flex w-full h-10 items-center rounded-lg border border-input bg-background px-3 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      <option value="">Pilih blok...</option>
+                      {Array.from(new Set(profilesList.map(p => p.blok).filter(b => b))).sort().map(blok => (
+                        <option key={blok} value={blok}>{blok}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {selectedBlok && (
+                    <div>
+                      <label htmlFor="warga" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">
+                        Warga
+                      </label>
+                      <select
+                        id="warga"
+                        value={selectedProfile}
+                        onChange={(e) => setSelectedProfile(e.target.value)}
+                        disabled={isPending}
+                        className="flex w-full h-10 items-center rounded-lg border border-input bg-background px-3 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        <option value="">Pilih warga...</option>
+                        {profilesList.filter(p => p.blok === selectedBlok).map(p => (
+                          <option key={p.id} value={p.id}>{p.nama_kk} ({p.login_id})</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
 
           {/* Nominal */}
           <div>

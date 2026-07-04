@@ -26,6 +26,10 @@ export default async function JimpitanDetailPage({
       id, tanggal, status, total_nominal, jumlah_warga_bayar, jumlah_penjaga_hadir,
       kelompok_id, keadaan, catatan, nama_inputter_snapshot, blok_inputter_snapshot,
       waktu_mulai, waktu_submit, approved_at, approved_by,
+      created_by_user_id, created_by_name, created_by_role, created_at, created_from,
+      submitted_by_user_id, submitted_by_name, submitted_at,
+      cancelled_by_user_id, cancelled_by_name, cancelled_at, cancel_reason,
+      kas_transaction_id,
       approver:profiles!jimpitan_sesi_approved_by_fkey(id, nama_kk, role)
     `)
     .eq('id', id)
@@ -119,12 +123,14 @@ export default async function JimpitanDetailPage({
     anggotaKelompok = (anggota ?? []) as AnggotaRow[]
   }
 
-  type StatusKey = 'AKTIF' | 'SUBMITTED' | 'APPROVED' | 'REJECTED'
+  type StatusKey = 'AKTIF' | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'DRAFT' | 'CANCELLED'
   const statusConfig: { color: string; label: string; icon: typeof Clock } = {
+    DRAFT: { color: 'bg-slate-100 text-slate-700', label: '📝 Draft', icon: Clock },
     AKTIF: { color: 'bg-amber-100 text-amber-700', label: '🟡 Sedang Berlangsung', icon: Clock },
     SUBMITTED: { color: 'bg-blue-100 text-blue-700', label: '🔵 Menunggu ACC Bendahara', icon: AlertCircle },
     APPROVED: { color: 'bg-emerald-100 text-emerald-700', label: '✅ Disetujui Bendahara', icon: CheckCircle2 },
     REJECTED: { color: 'bg-rose-100 text-rose-700', label: '❌ Ditolak', icon: XCircle },
+    CANCELLED: { color: 'bg-rose-100 text-rose-700', label: '❌ Dibatalkan', icon: XCircle },
   }[(sesi.status as StatusKey)] || { color: 'bg-slate-100 text-slate-700', label: sesi.status, icon: Clock }
 
   // Ambil profil user yang sedang login (untuk panel validasi)
@@ -211,6 +217,15 @@ export default async function JimpitanDetailPage({
         approvedAt={sesi.approved_at}
         currentUserRole={currentUserRole}
         currentUserName={currentUserName}
+        createdByName={sesi.created_by_name}
+        createdByRole={sesi.created_by_role}
+        createdAt={sesi.created_at}
+        createdFrom={sesi.created_from}
+        submittedByName={sesi.submitted_by_name}
+        submittedAt={sesi.submitted_at}
+        cancelledByName={sesi.cancelled_by_name}
+        cancelledAt={sesi.cancelled_at}
+        cancelReason={sesi.cancel_reason}
       />
     </div>
   )

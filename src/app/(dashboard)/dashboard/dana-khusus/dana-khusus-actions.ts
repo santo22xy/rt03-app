@@ -316,6 +316,7 @@ export async function toggleDanaKhususActive(formData: FormData): Promise<{
 
 /**
  * Get daftar dana khusus dengan progress summary
+ * Optimized to avoid N+1 RPC calls
  */
 export async function getDanaKhususList(): Promise<{
   data?: Array<{
@@ -342,43 +343,158 @@ export async function getDanaKhususList(): Promise<{
   const admin = createAdminClient()
   const { data: danaList, error } = await admin
     .from('dana_khusus')
-    .select('*')
+    .select(`
+      *,
+      tagihan:dana_khusus_tagihan(
+        nominal_tagihan,
+        total_terbayar,
+        status
+      )
+    `)
     .order('is_active', { ascending: false })
     .order('created_at', { ascending: false })
 
   if (error) return { error: error.message }
 
-  // Compute progress per dana khusus
-  type Progress = {
-    total_tagihan?: number | string | null
-    total_terbayar?: number | string | null
-    jumlah_lunas?: number | string | null
-    jumlah_cicil?: number | string | null
-    jumlah_belum?: number | string | null
-    pct_progres?: number | string | null
-  }
-  const enriched = await Promise.all(
-    (danaList ?? []).map(async (d) => {
-      const { data: progress } = await admin
-        .rpc('get_dana_khusus_progress', { p_dana_khusus_id: d.id })
+  const enriched = (danaList ?? []).map((d: any) => {
+    const tagihan = d.tagihan || []
+    const total_tagihan = tagihan.reduce((acc: number, t: any) => acc + Number(t.nominal_tagihan), 0)
+    const total_terbayar = tagihan.reduce((acc: number, t: any) => acc + Number(t.total_terbayar), 0)
+    const jumlah_lunas = tagihan.filter((t: any) => t.status === 'LUNAS').length
+    const jumlah_cicil = tagihan.filter((t: any) => t.status === 'CICIL').length
+    const jumlah_belum = tagihan.filter((t: any) => t.status === 'BELUM').length
+    const pct_progres = total_tagihan > 0 ? (total_terbayar / total_tagihan) * 100 : 0
 
-      // RPC return type bisa array of rows — ambil row pertama
-      const p: Progress | undefined = Array.isArray(progress)
-        ? (progress[0] as Progress | undefined)
-        : (progress as Progress | undefined)
-
-      return {
-        ...d,
-        total_tagihan: Number(p?.total_tagihan ?? 0),
-        total_terbayar: Number(p?.total_terbayar ?? 0),
-        jumlah_lunas: Number(p?.jumlah_lunas ?? 0),
-        jumlah_cicil: Number(p?.jumlah_cicil ?? 0),
-        jumlah_belum: Number(p?.jumlah_belum ?? 0),
-        pct_progres: Number(p?.pct_progres ?? 0),
-      }
-    })
-  )
+    return {
+      ...d,
+      total_tagihan,
+      total_terbayar,
+      jumlah_lunas,
+      jumlah_cicil,
+      jumlah_belum,
+      pct_progres: Math.round(pct_progres * 10) / 10
+    }
+  })
 
   return { data: enriched }
 }
+
+/**
+ * Edit dana_khusus_pembayaran (update nominal, tanggal, catatan, metode)
+ */
+export async function editDanaKhususPembayaran(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+}> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Tidak terautentikasi' }
+
+  const admin = createAdminClient()
+  const { data: profile } = await admin
+    .from('profiles')
+    .select('id, role')
+    .eq('id', user.id)
+    .single()
+
+  if (!profile || !['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'SUPERADMIN'].includes(profile.role)) {
+    return { error: 'Hanya pengurus yang boleh mengedit pembayaran dana khusus' }
+  }
+
+  const pembayaranId = formData.get('pembayaran_id') as string
+  const nominal = Number(formData.get('nominal'))
+  const metode = formData.get('metode') as string
+  const tanggalBayar = formData.get('tanggal_bayar') as string
+  const catatan = (formData.get('catatan') as string)?.trim()
+
+  if (!pembayaranId) return { error: 'ID pembayaran tidak ditemukan' }
+  if (!nominal || nominal <= 0) return { error: 'Nominal harus > 0' }
+
+  const { error } = await admin
+    .from('dana_khusus_pembayaran')
+    .update({
+      nominal,
+      metode: metode || 'TUNAI',
+      tanggal_bayar: tanggalBayar,
+      catatan: catatan || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', pembayaranId)
+
+  if (error) return { error: `Gagal edit pembayaran: ${error.message}` }
+
+  revalidatePath('/dashboard/dana-khusus')
+  revalidatePath('/warga/dana-khusus')
+
+  return { success: true }
+}
+
+/**
+ * Hapus dana_khusus_pembayaran (dan auto-update tagihan & kas_transaksi)
+ */
+export async function deleteDanaKhususPembayaran(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+}> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Tidak terautentikasi' }
+
+  const admin = createAdminClient()
+  const { data: profile } = await admin
+    .from('profiles')
+    .select('id, role')
+    .eq('id', user.id)
+    .single()
+
+  if (!profile || !['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'SUPERADMIN'].includes(profile.role)) {
+    return { error: 'Hanya pengurus yang boleh menghapus pembayaran dana khusus' }
+  }
+
+  const pembayaranId = formData.get('pembayaran_id') as string
+
+  if (!pembayaranId) return { error: 'ID pembayaran tidak ditemukan' }
+
+  const { error } = await admin
+    .from('dana_khusus_pembayaran')
+    .delete()
+    .eq('id', pembayaranId)
+
+  if (error) return { error: `Gagal hapus pembayaran: ${error.message}` }
+
+  revalidatePath('/dashboard/dana-khusus')
+  revalidatePath('/warga/dana-khusus')
+
+  return { success: true }
+}
+
+export async function getActiveDanaKhususAndProfiles() {
+  const admin = createAdminClient()
+  const [danaRes, profileRes] = await Promise.all([
+    getDanaKhususList(),
+    admin.from('profiles')
+      .select('id, login_id, nama_kk, blok, nomor_rumah')
+      .order('blok', { ascending: true })
+      .order('nomor_rumah', { ascending: true })
+  ])
+
+  const activeDanaKhusus = (danaRes?.data || []).filter(d => d.is_active)
+
+  return {
+    danaKhususList: activeDanaKhusus,
+    profilesList: profileRes?.data || []
+  }
+}
+
+export async function debugJimpitanSessions() {
+  const admin = createAdminClient()
+  const { data, error } = await admin
+    .from('jimpitan_sesi')
+    .select('id, tanggal, status')
+    .order('tanggal', { ascending: false })
+  
+  if (error) return { error: error.message }
+  return { data }
+}
+
 

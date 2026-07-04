@@ -1,12 +1,13 @@
 import Link from 'next/link'
 import { Card, CardContent, CardDescription, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   Users, Wallet, Megaphone,
   TrendingUp, AlertCircle, CheckCircle2, Clock,
   Activity, Sparkles, HandCoins, Shield, ChevronRight,
-  HeartHandshake,
+  HeartHandshake, ChevronLeft
 } from 'lucide-react'
 import { formatRupiah, getMonthName } from '@/lib/format'
 import { NextJadwalCard } from './next-jadwal-card'
@@ -26,24 +27,45 @@ type RecentPayment = {
 
 export const dynamic = 'force-dynamic'
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams
+}: {
+  searchParams: { bulan?: string }
+}) {
   // Pakai admin client (bypass RLS) supaya dashboard sync dengan database.
   // createClient() di sini kena RLS read policy yang kadang membuat count jadi 0
   // untuk sekretaris/bendahara yang belum match dengan auth.uid context.
   const admin = createAdminClient()
 
   const today = new Date()
-  // FIX timezone: pakai local-date formatter (jangan .toISOString() yg konversi ke UTC)
-  // Contoh bug: 2026-06-01 00:00 WIB → toISOString() → '2026-05-31T17:00:00Z' → slice(0,10) → '2026-05-31'
-  // Akibatnya query.eq('periode_bulan', currentMonthStr) salah cari bulan (1 hari lebih awal).
-  const _yyyy = today.getFullYear()
-  const _mm = String(today.getMonth() + 1).padStart(2, '0')
-  const _lastYyyy = today.getMonth() === 0 ? _yyyy - 1 : _yyyy
-  const _lastMm = today.getMonth() === 0 ? '12' : String(today.getMonth()).padStart(2, '0')
+  
+  // Parse bulan dari search params, default ke bulan ini
+  let targetDate: Date
+  if (searchParams.bulan) {
+    const [yyyy, mm] = searchParams.bulan.split('-').map(Number)
+    targetDate = new Date(yyyy, mm - 1, 1)
+  } else {
+    targetDate = new Date(today.getFullYear(), today.getMonth(), 1)
+  }
+  const _yyyy = targetDate.getFullYear()
+  const _mm = String(targetDate.getMonth() + 1).padStart(2, '0')
   const currentMonthStr = `${_yyyy}-${_mm}-01`
+  
+  // Bulan lalu untuk perbandingan
+  const lastMonthDate = new Date(_yyyy, targetDate.getMonth() - 1, 1)
+  const _lastYyyy = lastMonthDate.getFullYear()
+  const _lastMm = String(lastMonthDate.getMonth() + 1).padStart(2, '0')
   const lastMonthStr = `${_lastYyyy}-${_lastMm}-01`
+  
+  // Navigasi bulan
+  const prevMonth = new Date(_yyyy, targetDate.getMonth() - 1, 1)
+  const prevMonthStr = `${prevMonth.getFullYear()}-${String(prevMonth.getMonth() + 1).padStart(2, '0')}`
+  const nextMonth = new Date(_yyyy, targetDate.getMonth() + 1, 1)
+  const nextMonthStr = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`
+  const isCurrentMonth = today.getFullYear() === _yyyy && today.getMonth() === targetDate.getMonth()
+  
   // currentMonth Date object tetap dipakai untuk getMonthName() / toLocaleString() (aman)
-  const currentMonth = new Date(_yyyy, today.getMonth(), 1)
+  const currentMonth = new Date(_yyyy, targetDate.getMonth(), 1)
   void currentMonth // hanya untuk debugging
 
   // Fetch all data in parallel
@@ -51,6 +73,8 @@ export default async function DashboardPage() {
   // - jimpitan_tagihan.status: LUNAS | CICIL | BELUM (dinormalisasi script 27)
   // - jimpitan_sesi.status:     AKTIF | SUBMITTED | APPROVED | REJECTED (SQL 20)
   // - jimpitan_sesi.total_pendapatan (SQL 20, bukan total_nominal)
+  const nextMonthStart = new Date(_yyyy, targetDate.getMonth() + 1, 1).toISOString().slice(0, 10)
+  
   const [
     wargaRes, pengurusRes,
     tagihanCurrentRes,
@@ -69,25 +93,29 @@ export default async function DashboardPage() {
     admin.from('jimpitan_tagihan').select('nominal_tagihan, total_terbayar, status').eq('periode_bulan', currentMonthStr),
     // Total pendapatan jimpitan APPROVED bulan ini vs bulan lalu
     // FIX: schema 20 pakai enum 'APPROVED' (bukan 'ACC' — itu nama aksi, bukan status)
-    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'APPROVED').gte('tanggal', currentMonthStr),
+    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'APPROVED').gte('tanggal', currentMonthStr).lt('tanggal', nextMonthStart),
     admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'APPROVED').gte('tanggal', lastMonthStr).lt('tanggal', currentMonthStr),
     // Count by status bulan ini
     admin.from('jimpitan_tagihan').select('id', { count: 'exact', head: true }).eq('status', 'LUNAS').eq('periode_bulan', currentMonthStr),
     admin.from('jimpitan_tagihan').select('id', { count: 'exact', head: true }).eq('status', 'CICIL').eq('periode_bulan', currentMonthStr),
     admin.from('jimpitan_tagihan').select('id', { count: 'exact', head: true }).eq('status', 'BELUM').eq('periode_bulan', currentMonthStr),
     admin.from('info_pengumuman').select('id', { count: 'exact', head: true }).eq('is_published', true),
-    // Sesi jimpitan yang sudah disetujui (pembayaran terbaru)
+    // Sesi jimpitan yang sudah disetujui (pembayaran di bulan yang dipilih)
     // FIX: enum 'APPROVED' (bukan 'ACC')
     admin.from('jimpitan_sesi').select(`
       id, tanggal, total_pendapatan, status,
       profile:profiles!jimpitan_sesi_profile_id_petugas_fkey(nama_kk, login_id, blok, nomor_rumah)
-    `).eq('status', 'APPROVED').order('tanggal', { ascending: false }).limit(5),
-    // FIX: enum 'AKTIF' (bukan 'DRAFT' — aksi 'buat sesi' tulis 'AKTIF')
-    admin.from('jimpitan_sesi').select('id', { count: 'exact', head: true }).eq('status', 'AKTIF'),
+    `).eq('status', 'APPROVED').gte('tanggal', currentMonthStr).lt('tanggal', nextMonthStart).order('tanggal', { ascending: false }).limit(5),
+    // FIX: enum 'AKTIF' (bukan 'DRAFT' — aksi 'buat sesi' tulis 'AKTIF'), hanya untuk bulan ini
+    isCurrentMonth 
+      ? admin.from('jimpitan_sesi').select('id', { count: 'exact', head: true }).eq('status', 'AKTIF')
+      : Promise.resolve({ data: null, count: 0, error: null }),
     // FIX: enum 'APPROVED' (bukan 'ACC')
-    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'APPROVED').gte('tanggal', currentMonthStr),
-    // FIX timezone: pakai local-date formatter (lihat comment line 33-36 untuk penjelasan bug)
-    admin.from('v_penjaga_efektif').select('tanggal, profile_efektif_id, nama_efektif, is_swapped, nama_asli, profile_asli_id, minggu_ke').gte('tanggal', `${_yyyy}-${_mm}-${String(today.getDate()).padStart(2, '0')}`).order('tanggal', { ascending: true }).limit(1).maybeSingle(),
+    admin.from('jimpitan_sesi').select('tanggal, total_pendapatan').eq('status', 'APPROVED').gte('tanggal', currentMonthStr).lt('tanggal', nextMonthStart),
+    // FIX timezone: pakai local-date formatter (lihat comment line 33-36 untuk penjelasan bug), hanya untuk bulan ini
+    isCurrentMonth
+      ? admin.from('v_penjaga_efektif').select('tanggal, profile_efektif_id, nama_efektif, is_swapped, nama_asli, profile_asli_id, minggu_ke').gte('tanggal', `${_yyyy}-${_mm}-${String(today.getDate()).padStart(2, '0')}`).order('tanggal', { ascending: true }).limit(1).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
     admin.rpc('is_jimpitan_window_open'),
     // FIX Problem #5: Dana khusus aktif summary
     admin.from('dana_khusus').select('id, judul, target_per_kk, is_wajib, tanggal_selesai').eq('is_active', true).order('tanggal_selesai', { ascending: true }).limit(3),
@@ -191,19 +219,31 @@ export default async function DashboardPage() {
         <div className="absolute top-0 right-0 w-40 h-40 bg-white/10 rounded-full blur-2xl -mr-20 -mt-20" />
         <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full blur-2xl -ml-16 -mb-16" />
         <div className="relative flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Sparkles className="w-4 h-4 text-amber-300" />
-              <span className="text-[10px] font-bold uppercase tracking-widest text-white/80">
-                Dashboard Pengurus
-              </span>
+          <div className="flex items-center gap-4">
+            <Link href={`/dashboard?bulan=${prevMonthStr}`}>
+              <Button variant="ghost" size="sm" className="h-9 w-9 p-0 bg-white/10 hover:bg-white/20">
+                <ChevronLeft className="w-4 h-4 text-white" />
+              </Button>
+            </Link>
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="w-4 h-4 text-amber-300" />
+                <span className="text-[10px] font-bold uppercase tracking-widest text-white/80">
+                  Dashboard Pengurus
+                </span>
+              </div>
+              <h1 className="text-2xl md:text-3xl font-bold leading-tight">
+                Ringkasan {getMonthName(currentMonthStr)}
+              </h1>
+              <p className="text-sm text-white/80 mt-1.5">
+                {isCurrentMonth ? 'Pantau aktivitas warga dan iuran' : 'Riwayat aktivitas & iuran'}
+              </p>
             </div>
-            <h1 className="text-2xl md:text-3xl font-bold leading-tight">
-              Ringkasan RT 03
-            </h1>
-            <p className="text-sm text-white/80 mt-1.5">
-              {getMonthName(currentMonth.toISOString().slice(0, 10))} · Pantau aktivitas warga dan iuran
-            </p>
+            <Link href={`/dashboard?bulan=${nextMonthStr}`}>
+              <Button variant="ghost" size="sm" className="h-9 w-9 p-0 bg-white/10 hover:bg-white/20">
+                <ChevronRight className="w-4 h-4 text-white" />
+              </Button>
+            </Link>
           </div>
           <div className="hidden md:flex items-center justify-center w-14 h-14 bg-white/15 backdrop-blur-sm rounded-2xl shrink-0">
             <Shield className="w-7 h-7 text-white" />
@@ -292,72 +332,74 @@ export default async function DashboardPage() {
       )}
 
       {/* ====== RONDA & JIMPITAN ====== */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Jadwal Ronda Mendatang */}
-        <NextJadwalCard
-          nextJadwal={nextJadwal ? {
-            tanggal: nextJadwal.tanggal,
-            profile_efektif_id: nextJadwal.profile_efektif_id,
-            nama_efektif: nextJadwal.nama_efektif,
-            is_swapped: !!nextJadwal.is_swapped,
-            nama_asli: nextJadwal.nama_asli ?? null,
-            profile_asli_id: nextJadwal.profile_asli_id,
-            minggu_ke: nextJadwal.minggu_ke ?? null,
-          } : null}
-          anggota={nextJadwalAnggota}
-        />
+      {isCurrentMonth && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Jadwal Ronda Mendatang */}
+          <NextJadwalCard
+            nextJadwal={nextJadwal ? {
+              tanggal: nextJadwal.tanggal,
+              profile_efektif_id: nextJadwal.profile_efektif_id,
+              nama_efektif: nextJadwal.nama_efektif,
+              is_swapped: !!nextJadwal.is_swapped,
+              nama_asli: nextJadwal.nama_asli ?? null,
+              profile_asli_id: nextJadwal.profile_asli_id,
+              minggu_ke: nextJadwal.minggu_ke ?? null,
+            } : null}
+            anggota={nextJadwalAnggota}
+          />
 
-        {/* Jimpitan Status */}
-        <Card className="overflow-hidden border-0 shadow-md ring-1 ring-emerald-200/60">
-          <div className="relative bg-gradient-to-r from-emerald-50 to-teal-50 px-5 py-3 border-b border-emerald-100">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <HandCoins className="w-4 h-4 text-emerald-600" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">
-                  Jimpitan
-                </span>
-              </div>
-              <Link href="/dashboard/jimpitan" className="text-[10px] text-emerald-600 hover:underline font-semibold">
-                Lihat →
-              </Link>
-            </div>
-          </div>
-          <CardContent className="p-4 space-y-2">
-            {isJimpitanWindowOpen && (
-              <div className="flex items-center gap-2 px-2.5 py-1.5 bg-emerald-100 rounded-lg">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <p className="text-xs font-semibold text-emerald-700">
-                  Window buka - warga bisa daftar
-                </p>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-amber-50 rounded-lg p-2.5 text-center">
-                <p className="text-[9px] font-bold uppercase text-amber-700">Pending ACC</p>
-                <p className="text-xl font-bold text-amber-700 mt-0.5">
-                  {jimpitanPendingRes.count ?? 0}
-                </p>
-              </div>
-              <div className="bg-emerald-50 rounded-lg p-2.5 text-center">
-                <p className="text-[9px] font-bold uppercase text-emerald-700">Bulan Ini</p>
-                <p className="text-base font-bold text-emerald-700 mt-0.5 truncate">
-                  {formatRupiah(jimpitanMonthTotal)}
-                </p>
+          {/* Jimpitan Status */}
+          <Card className="overflow-hidden border-0 shadow-md ring-1 ring-emerald-200/60">
+            <div className="relative bg-gradient-to-r from-emerald-50 to-teal-50 px-5 py-3 border-b border-emerald-100">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <HandCoins className="w-4 h-4 text-emerald-600" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                    Jimpitan
+                  </span>
+                </div>
+                <Link href="/dashboard/jimpitan" className="text-[10px] text-emerald-600 hover:underline font-semibold">
+                  Lihat →
+                </Link>
               </div>
             </div>
-            {(jimpitanPendingRes.count ?? 0) > 0 && (
-              <Link
-                href="/dashboard/kas"
-                className="flex items-center justify-center gap-1.5 w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold py-2 rounded-lg transition-colors"
-              >
-                <AlertCircle className="w-3.5 h-3.5" />
-                ACC Sekarang
-                <ChevronRight className="w-3.5 h-3.5" />
-              </Link>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+            <CardContent className="p-4 space-y-2">
+              {isJimpitanWindowOpen && (
+                <div className="flex items-center gap-2 px-2.5 py-1.5 bg-emerald-100 rounded-lg">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <p className="text-xs font-semibold text-emerald-700">
+                    Window buka - warga bisa daftar
+                  </p>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-amber-50 rounded-lg p-2.5 text-center">
+                  <p className="text-[9px] font-bold uppercase text-amber-700">Pending ACC</p>
+                  <p className="text-xl font-bold text-amber-700 mt-0.5">
+                    {jimpitanPendingRes.count ?? 0}
+                  </p>
+                </div>
+                <div className="bg-emerald-50 rounded-lg p-2.5 text-center">
+                  <p className="text-[9px] font-bold uppercase text-emerald-700">Bulan Ini</p>
+                  <p className="text-base font-bold text-emerald-700 mt-0.5 truncate">
+                    {formatRupiah(jimpitanMonthTotal)}
+                  </p>
+                </div>
+              </div>
+              {(jimpitanPendingRes.count ?? 0) > 0 && (
+                <Link
+                  href="/dashboard/kas"
+                  className="flex items-center justify-center gap-1.5 w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold py-2 rounded-lg transition-colors"
+                >
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  ACC Sekarang
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </Link>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* ====== DESKTOP: 2-col (progress + recent) ====== */}
       <div className="hidden lg:grid lg:grid-cols-2 gap-6">

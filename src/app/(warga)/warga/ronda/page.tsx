@@ -85,6 +85,10 @@ export default async function WargaRondaPage() {
   const isMyTurn = jadwalWithSwap?.find(
     (j) => j.profile_efektif_id === profile.id
   )
+  // Cek apakah SAYA adalah petugas ronda untuk HARI INI
+  const isMyTurnToday = jadwalWithSwap?.find(
+    (j) => j.profile_efektif_id === profile.id && j.tanggal === today
+  )
 
   return (
     <div className="space-y-4 pb-6">
@@ -131,9 +135,14 @@ export default async function WargaRondaPage() {
                   : `Petugas saat ini: ${sesiAktif.nama_inputter_snapshot} (${sesiAktif.blok_inputter_snapshot})`
                 : 'Belum ada petugas. Daftarkan diri Anda sekarang!'}
             </p>
-            {!sesiAktif && (
+            {!sesiAktif && isMyTurnToday && (
               <div className="mt-4">
                 <DaftarInputter tanggal={today} />
+              </div>
+            )}
+            {!sesiAktif && !isMyTurnToday && (
+              <div className="mt-4 p-3 bg-white/10 rounded-lg text-sm">
+                <p className="font-semibold">Hanya warga yang bertugas ronda hari ini yang bisa membuat sesi jimpitan.</p>
               </div>
             )}
             {sesiAktif && sesiAktif.input_by === profile.id && (

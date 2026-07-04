@@ -220,6 +220,7 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
                     </p>
                   </div>
                   <p className="font-bold text-emerald-700">{formatRupiah(p.nominal)}</p>
+                  <EditPembayaranDanaKhusus p={p} />
                 </div>
               ))}
             </div>
@@ -232,6 +233,7 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
 
 // Inline form untuk input pembayaran (client component needed)
 import { BayarCicilanInline } from './bayar-cicilan-inline'
+import { EditPembayaranDanaKhusus } from './edit-pembayaran-dana-khusus'
 
 type DanaKhususTagihanRow = {
   id: string

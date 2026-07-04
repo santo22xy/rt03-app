@@ -1,25 +1,46 @@
 import { Card, CardContent, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { createAdminClient } from '@/lib/supabase/server'
-import { Wallet, CheckCircle2, Clock, AlertCircle, TrendingUp, Users, Sparkles } from 'lucide-react'
+import { Wallet, CheckCircle2, Clock, AlertCircle, TrendingUp, Users, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react'
 import { formatRupiah, getMonthName } from '@/lib/format'
 import Link from 'next/link'
+import { KelebihanManager } from './kelebihan-manager'
 
 export const dynamic = 'force-dynamic'
 
-export default async function IuranPage() {
+export default async function IuranPage({
+  searchParams
+}: {
+  searchParams: { bulan?: string }
+}) {
   // FIX: pakai admin client untuk bypass RLS recursion di profiles policy.
   const supabase = createAdminClient()
   const today = new Date()
-  // FIX timezone: pakai local-date formatter (lihat dashboard/page.tsx untuk penjelasan)
-  const _yyyy = today.getFullYear()
-  const _mm = String(today.getMonth() + 1).padStart(2, '0')
+  
+  // Parse bulan dari search params, default ke bulan ini
+  let targetDate: Date
+  if (searchParams.bulan) {
+    const [yyyy, mm] = searchParams.bulan.split('-').map(Number)
+    targetDate = new Date(yyyy, mm - 1, 1)
+  } else {
+    targetDate = new Date(today.getFullYear(), today.getMonth(), 1)
+  }
+  const _yyyy = targetDate.getFullYear()
+  const _mm = String(targetDate.getMonth() + 1).padStart(2, '0')
   const currentMonth = `${_yyyy}-${_mm}-01`
+  
+  // Hitung bulan sebelum dan sesudah untuk navigasi
+  const prevMonth = new Date(_yyyy, targetDate.getMonth() - 1, 1)
+  const prevMonthStr = `${prevMonth.getFullYear()}-${String(prevMonth.getMonth() + 1).padStart(2, '0')}`
+  const nextMonth = new Date(_yyyy, targetDate.getMonth() + 1, 1)
+  const nextMonthStr = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`
+  const isCurrentMonth = today.getFullYear() === _yyyy && today.getMonth() === targetDate.getMonth()
 
   // Summary per-bulan
   const { data: tagihan } = await supabase
     .from('jimpitan_tagihan')
-    .select('id, status, nominal_tagihan, total_terbayar, kategori, profile_id')
+    .select('id, status, nominal_tagihan, total_terbayar, kategori, profile_id, kelebihan, kelebihan_tujuan, kelebihan_catatan')
     .eq('periode_bulan', currentMonth)
 
   const { data: profiles } = await supabase
@@ -31,22 +52,39 @@ export default async function IuranPage() {
 
   const totalTagihan = tagihan?.reduce((s, t) => s + Number(t.nominal_tagihan), 0) ?? 0
   const totalTerbayar = tagihan?.reduce((s, t) => s + Number(t.total_terbayar), 0) ?? 0
-  const totalLunas = tagihan?.filter((t) => t.status === 'LUNAS').length ?? 0
-  const totalSebagian = tagihan?.filter((t) => t.status === 'CICIL').length ?? 0
-  const totalBelum = tagihan?.filter((t) => t.status === 'BELUM').length ?? 0
 
   // Group by kategori
   const normalTariff = tagihan?.filter((t) => t.kategori === 'NORMAL') ?? []
   const normalCount = normalTariff.length
-  const normalLunas = normalTariff.filter((t) => t.status === 'LUNAS').length
+  const normalLunas = normalTariff.filter((t) => {
+    const nominal = Number(t.total_terbayar)
+    const tagihanVal = Number(t.nominal_tagihan)
+    return nominal >= tagihanVal && nominal > 0
+  }).length
   const konfirmasiTariff = tagihan?.filter((t) => t.kategori === 'PERLU_KONFIRMASI') ?? []
   const konfirmasiCount = konfirmasiTariff.length
-  const konfirmasiLunas = konfirmasiTariff.filter((t) => t.status === 'LUNAS').length
+  const konfirmasiLunas = konfirmasiTariff.filter((t) => {
+    const nominal = Number(t.total_terbayar)
+    const tagihanVal = Number(t.nominal_tagihan)
+    return nominal >= tagihanVal && nominal > 0
+  }).length
 
-  // Per profile detail
+  // Per profile detail: hitung status secara real-time
   const profileMap = new Map(profiles?.map((p) => [p.id, p]) ?? [])
   const sortedTagihan = (tagihan ?? [])
-    .map((t) => ({ ...t, profile: profileMap.get(t.profile_id) }))
+    .map((t) => {
+      let realStatus: 'LUNAS' | 'CICIL' | 'BELUM' | 'LEBIH' = 'BELUM'
+      if (Number(t.total_terbayar) > Number(t.nominal_tagihan)) {
+        realStatus = 'LEBIH'
+      } else if (Number(t.total_terbayar) === Number(t.nominal_tagihan) && Number(t.total_terbayar) > 0) {
+        realStatus = 'LUNAS'
+      } else if (Number(t.total_terbayar) > 0 && Number(t.total_terbayar) < Number(t.nominal_tagihan)) {
+        realStatus = 'CICIL'
+      } else {
+        realStatus = 'BELUM'
+      }
+      return { ...t, profile: profileMap.get(t.profile_id), realStatus }
+    })
     .sort((a, b) => {
       const ba = a.profile?.blok ?? 'Z'
       const bb = b.profile?.blok ?? 'Z'
@@ -54,29 +92,48 @@ export default async function IuranPage() {
       return Number(a.profile?.nomor_rumah ?? 0) - Number(b.profile?.nomor_rumah ?? 0)
     })
 
+  // Update summary counts dengan real status
+  const totalLunas = sortedTagihan.filter((t) => t.realStatus === 'LUNAS' || t.realStatus === 'LEBIH').length
+  const totalSebagian = sortedTagihan.filter((t) => t.realStatus === 'CICIL').length
+  const totalBelum = sortedTagihan.filter((t) => t.realStatus === 'BELUM').length
+
   return (
     <div className="space-y-6 pb-8">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Wallet className="w-4 h-4 text-blue-500" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-blue-600">
-              Iuran Bulanan
-            </span>
+        <div className="flex items-center gap-4">
+          <Link href={`/dashboard/iuran?bulan=${prevMonthStr}`}>
+            <Button variant="outline" size="sm" className="h-9 w-9 p-0">
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+          </Link>
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <Wallet className="w-4 h-4 text-blue-500" />
+              <span className="text-[10px] font-bold uppercase tracking-widest text-blue-600">
+                Iuran Bulanan
+              </span>
+            </div>
+            <h1 className="text-2xl md:text-3xl font-bold">Iuran {getMonthName(currentMonth)}</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Status tagihan & pembayaran warga {isCurrentMonth ? 'bulan ini' : ''}
+            </p>
           </div>
-          <h1 className="text-2xl md:text-3xl font-bold">Iuran {getMonthName(currentMonth)}</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Status tagihan & pembayaran warga bulan ini
-          </p>
+          <Link href={`/dashboard/iuran?bulan=${nextMonthStr}`}>
+            <Button variant="outline" size="sm" className="h-9 w-9 p-0">
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </Link>
         </div>
         <div className="flex gap-2 shrink-0">
-          <Link
-            href="/dashboard/iuran/bulk-input"
-            className="inline-flex shrink-0 items-center justify-center rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-semibold h-10 px-4 shadow-md transition-colors gap-2"
-          >
-            <Sparkles className="w-4 h-4" />
-            Bulk Input
-          </Link>
+          {isCurrentMonth && (
+            <Link
+              href="/dashboard/iuran/bulk-input"
+              className="inline-flex shrink-0 items-center justify-center rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-semibold h-10 px-4 shadow-md transition-colors gap-2"
+            >
+              <Sparkles className="w-4 h-4" />
+              Bulk Input
+            </Link>
+          )}
         </div>
       </div>
 
@@ -182,7 +239,8 @@ export default async function IuranPage() {
                   <th className="text-right px-4 py-2.5 font-semibold text-[11px] uppercase tracking-wider text-slate-600">Tagihan</th>
                   <th className="text-right px-4 py-2.5 font-semibold text-[11px] uppercase tracking-wider text-slate-600">Dibayar</th>
                   <th className="text-center px-4 py-2.5 font-semibold text-[11px] uppercase tracking-wider text-slate-600">Status</th>
-                </tr>
+            <th className="text-center px-4 py-2.5 font-semibold text-[11px] uppercase tracking-wider text-slate-600">Kelebihan</th>
+          </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {sortedTagihan.map((t) => (
@@ -216,7 +274,7 @@ export default async function IuranPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      {t.status === 'LUNAS' ? (
+                      {t.realStatus === 'LUNAS' || t.realStatus === 'LEBIH' ? (
                         <div className="inline-flex flex-col gap-0.5">
                           <Badge className="bg-emerald-100 text-emerald-700 text-[9px]">
                             <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" /> Lunas
@@ -227,7 +285,7 @@ export default async function IuranPage() {
                             </Badge>
                           )}
                         </div>
-                      ) : t.status === 'CICIL' ? (
+                      ) : t.realStatus === 'CICIL' ? (
                         <Badge className="bg-amber-100 text-amber-700 text-[9px]">
                           <Clock className="w-2.5 h-2.5 mr-0.5" /> Cicil
                         </Badge>
@@ -236,6 +294,14 @@ export default async function IuranPage() {
                           <AlertCircle className="w-2.5 h-2.5 mr-0.5" /> Belum
                         </Badge>
                       )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <KelebihanManager
+                        tagihanId={t.id}
+                        kelebihan={Number(t.kelebihan)}
+                        kelebihanTujuan={t.kelebihan_tujuan}
+                        kelebihanCatatan={t.kelebihan_catatan}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -266,8 +332,8 @@ export default async function IuranPage() {
                   )}
                 </p>
               </div>
-              <div className="shrink-0 flex flex-col gap-0.5 items-end">
-                {t.status === 'LUNAS' ? (
+              <div className="shrink-0 flex flex-col gap-0.5 items-end gap-2">
+                {t.realStatus === 'LUNAS' || t.realStatus === 'LEBIH' ? (
                   <>
                     <Badge className="bg-emerald-100 text-emerald-700 text-[9px]">Lunas</Badge>
                     {Number(t.total_terbayar) > Number(t.nominal_tagihan) && (
@@ -276,11 +342,17 @@ export default async function IuranPage() {
                       </Badge>
                     )}
                   </>
-                ) : t.status === 'CICIL' ? (
+                ) : t.realStatus === 'CICIL' ? (
                   <Badge className="bg-amber-100 text-amber-700 text-[9px]">Cicil</Badge>
                 ) : (
                   <Badge className="bg-rose-100 text-rose-700 text-[9px]">Belum</Badge>
                 )}
+                <KelebihanManager
+                  tagihanId={t.id}
+                  kelebihan={Number(t.kelebihan)}
+                  kelebihanTujuan={t.kelebihan_tujuan}
+                  kelebihanCatatan={t.kelebihan_catatan}
+                />
               </div>
               </div>
             ))}

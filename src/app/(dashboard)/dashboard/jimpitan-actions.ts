@@ -3,6 +3,56 @@
 import { revalidatePath } from 'next/cache'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { cookies } from 'next/headers'
+import { formatTanggal } from '@/lib/format'
+
+// =====================================================
+// FETCH FOR JIMPITAN LIST PAGE
+// =====================================================
+export async function getJimpitanListData(month: number, year: number) {
+  const auth = createClient()
+  const supabase = createAdminClient()
+  
+  const { data: { user } } = await auth.auth.getUser()
+  let profile: any = null
+  let isPengurus = false
+  if (user) {
+    const { data: p } = await supabase
+      .from('profiles')
+      .select('id, role, nama_kk')
+      .eq('id', user.id)
+      .single()
+    profile = p
+    isPengurus = ['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'PENGURUS', 'SUPERADMIN'].includes(p?.role ?? '')
+  }
+  
+  const { data: isOpenData } = await supabase.rpc('is_jimpitan_window_open')
+  const isWindowOpen = !!isOpenData
+  
+  const startDate = `${year}-${String(month + 1).padStart(2, '0')}-01`
+  const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0]
+  
+  console.log('Jimpitan query range:', startDate, 'to', endDate)
+  
+  const { data: sesi } = await supabase
+    .from('jimpitan_sesi')
+    .select(`
+      id, tanggal, status, total_nominal, total_pendapatan, jumlah_warga_bayar, jumlah_penjaga_hadir,
+      keadaan, nama_inputter_snapshot, blok_inputter_snapshot, waktu_mulai, waktu_submit, approved_at, catatan,
+      created_by_name, created_by_role, cancelled_by_name, cancel_reason,
+      jimpitan_detail(nominal, is_bayar)
+    `)
+    .gte('tanggal', startDate)
+    .lte('tanggal', endDate)
+    .order('tanggal', { ascending: false })
+    .limit(50)
+  
+  return {
+    profile,
+    isPengurus,
+    isWindowOpen,
+    sesi: sesi || []
+  }
+}
 
 // =====================================================
 // HELPER: Hitung ulang jumlah_penjaga_hadir setelah toggle/swap
@@ -63,6 +113,160 @@ function isPengurus(profile: { role: string } | null): boolean {
 }
 
 // =====================================================
+// Cek apakah user adalah petugas ronda untuk tanggal tertentu
+// Periksa v_penjaga_efektif (dengan swap)
+// =====================================================
+export async function getRondaPetugasForDate(tanggal: string) {
+  const admin = createAdminClient()
+  const { data } = await admin
+    .from('v_penjaga_efektif')
+    .select('*')
+    .eq('tanggal', tanggal)
+  return data
+}
+
+export async function isUserRondaPetugas(tanggal: string): Promise<{ isPetugas: boolean; data?: any }> {
+  const profile = (await getCurrentWarga()) || (await getCurrentUser())
+  if (!profile) return { isPetugas: false }
+
+  const petugasList = await getRondaPetugasForDate(tanggal)
+  const isPetugas = (petugasList || []).some((p) => p.profile_efektif_id === profile.id)
+  return { isPetugas, data: { profile, petugasList } }
+}
+
+// =====================================================
+// Cek apakah ada sesi jimpitan untuk tanggal tertentu
+// =====================================================
+export async function getSesiForDate(tanggal: string) {
+  const admin = createAdminClient()
+  const { data } = await admin
+    .from('jimpitan_sesi')
+    .select('*')
+    .eq('tanggal', tanggal)
+    .maybeSingle()
+  return data
+}
+
+// =====================================================
+// Buat sesi jimpitan baru (hanya jika user petugas ronda dan belum ada sesi)
+// =====================================================
+export async function createJimpitanSesi(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+  sesiId?: string
+}> {
+  const profile = (await getCurrentWarga()) || (await getCurrentUser())
+  if (!profile) return { error: 'Anda belum login' }
+
+  const tanggal = formData.get('tanggal') as string
+  if (!tanggal) return { error: 'Tanggal wajib dipilih' }
+
+  // Periksa apakah user adalah petugas ronda (kecuali pengurus)
+  if (!isPengurus(profile)) {
+    const { isPetugas } = await isUserRondaPetugas(tanggal)
+    if (!isPetugas) {
+      return { error: 'Hanya petugas ronda yang bisa membuat sesi jimpitan' }
+    }
+  }
+
+  const admin = createAdminClient()
+
+  // Periksa apakah sudah ada sesi untuk tanggal ini
+  const existingSesi = await getSesiForDate(tanggal)
+  if (existingSesi) {
+    if (existingSesi.status !== 'CANCELLED') {
+      return {
+        error: `Sesi jimpitan tanggal ini sudah dibuat oleh ${existingSesi.created_by_name || 'seseorang'}`,
+        sesiId: existingSesi.id
+      }
+    } else {
+      // If cancelled, only pengurus can re-open
+      if (!isPengurus(profile)) {
+        return { error: 'Sesi lama dibatalkan. Hanya pengurus yang bisa membuat sesi baru.' }
+      }
+    }
+  }
+
+  // Insert sesi baru dengan created_by info
+  const { data, error } = await admin
+    .from('jimpitan_sesi')
+    .insert({
+      tanggal,
+      waktu_mulai: new Date().toISOString(),
+      status: 'DRAFT', // Use DRAFT as per user request
+      input_by: profile.id,
+      nama_inputter_snapshot: profile.nama_kk,
+      blok_inputter_snapshot: profile.blok,
+      created_by_user_id: profile.id,
+      created_by_name: profile.nama_kk,
+      created_by_role: profile.role,
+      created_from: isPengurus(profile) ? 'dashboard_pengurus' : 'warga_ronda',
+    })
+    .select('id')
+    .single()
+
+  if (error || !data) {
+    return { error: error?.message || 'Gagal membuat sesi jimpitan' }
+  }
+
+  revalidatePath('/dashboard/jimpitan')
+  revalidatePath('/warga')
+  revalidatePath('/warga/jimpitan')
+
+  return { success: true, sesiId: data.id }
+}
+
+// =====================================================
+// Cancel sesi jimpitan (hanya pengurus)
+// =====================================================
+export async function cancelJimpitanSesi(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+}> {
+  const profile = await getCurrentUser()
+  if (!profile) return { error: 'Anda belum login' }
+  if (!isPengurus(profile)) return { error: 'Hanya pengurus yang bisa membatalkan sesi' }
+
+  const sesiId = formData.get('sesiId') as string
+  const alasan = formData.get('alasan') as string
+  if (!sesiId) return { error: 'Sesi ID tidak ditemukan' }
+  if (!alasan) return { error: 'Alasan pembatalan wajib diisi' }
+
+  const admin = createAdminClient()
+
+  const { data: sesi } = await admin
+    .from('jimpitan_sesi')
+    .select('id, status, total_nominal')
+    .eq('id', sesiId)
+    .maybeSingle()
+
+  if (!sesi) return { error: 'Sesi tidak ditemukan' }
+
+  if (sesi.status === 'APPROVED') {
+    // Warning: butuh koreksi kas, tapi tetap izinkan cancel (sesuai user request)
+    console.warn('Sesi sudah di-APPROVED. Pembatalan butuh koreksi manual di kas_transaksi.')
+  }
+
+  const { error } = await admin
+    .from('jimpitan_sesi')
+    .update({
+      status: 'CANCELLED',
+      cancelled_by_user_id: profile.id,
+      cancelled_by_name: profile.nama_kk,
+      cancelled_at: new Date().toISOString(),
+      cancel_reason: alasan,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', sesiId)
+
+  if (error) return { error: `Gagal membatalkan sesi: ${error.message}` }
+
+  revalidatePath('/dashboard/jimpitan')
+  revalidatePath('/warga')
+  return { success: true }
+}
+
+// =====================================================
 // PENGURUS: BUAT SESI JIMPITAN MANUAL (untuk testing di luar window)
 // Dipakai untuk uji alur sebelum hari H. Tanggal bebas (bukan hanya Sabtu).
 // Return: { success, error, sesiId } — client handle toast & redirect
@@ -116,10 +320,16 @@ export async function pengurusBuatSesi(formData: FormData): Promise<{
       input_by: profile.id,
       nama_inputter_snapshot: `${profile.nama_kk} (Pengurus)`,
       blok_inputter_snapshot: profile.blok,
+      created_by_user_id: profile.id,
+      created_by_name: profile.nama_kk,
+      created_by_role: profile.role,
+      created_from: 'dashboard_pengurus',
       // FIX: pengurus yang buat sesi manual → langsung APPROVED (skip alur ACC)
       // biar total_pendapatan langsung terhitung di dashboard
       status: 'APPROVED',
       approved_by: profile.id,
+      approved_by_user_id: profile.id,
+      approved_by_name: profile.nama_kk,
       approved_at: new Date().toISOString(),
       catatan: 'Dibuat manual oleh pengurus (uji coba alur)',
     })
@@ -148,23 +358,29 @@ export async function daftarJadiInputter(tanggal: string) {
   const profile = (await getCurrentWarga()) || (await getCurrentUser())
   if (!profile) return { error: 'Sesi login tidak valid' }
 
-  // WARGA wajib window check. PENGURUS bebas (untuk uji coba).
+  // WARGA wajib window check dan cek apakah dia petugas ronda untuk tanggal ini!
   if (!isPengurus(profile)) {
     const admin = createAdminClient()
     const { data: isOpen } = await admin.rpc('is_jimpitan_window_open')
     if (!isOpen) {
       return { error: 'Window jimpitan tertutup. Hanya pengurus yang bisa membuat sesi di luar window.' }
     }
+
+    // Cek apakah warga ini adalah petugas ronda untuk tanggal ini
+    const isRonda = await isUserRondaPetugas(profile.id, tanggal)
+    if (!isRonda) {
+      return { error: 'Hanya warga yang sedang bertugas ronda hari ini yang bisa membuat sesi jimpitan.' }
+    }
   }
 
   const admin = createAdminClient()
 
-  // Cek apakah sudah ada sesi untuk tanggal ini
+  // Cek apakah sudah ada sesi untuk tanggal ini (any status except CANCELLED)
   const { data: existing } = await admin
     .from('jimpitan_sesi')
     .select('id, input_by, status')
     .eq('tanggal', tanggal)
-    .in('status', ['AKTIF', 'SUBMITTED'])
+    .not('status', 'in', '("CANCELLED")')
     .maybeSingle()
 
   if (existing) {
@@ -185,6 +401,10 @@ export async function daftarJadiInputter(tanggal: string) {
         ? `${profile.nama_kk} (Pengurus)`
         : profile.nama_kk,
       blok_inputter_snapshot: profile.blok,
+      created_by_user_id: profile.id,
+      created_by_name: profile.nama_kk,
+      created_by_role: profile.role,
+      created_from: isPengurus(profile) ? 'dashboard_pengurus' : 'warga_app',
       // FIX: pengurus yang input manual → langsung APPROVED biar langsung
       // masuk dashboard "Iuran Bulan Ini" tanpa alur ACC terpisah.
       // Warga biasa tetap AKTIF dan perlu submit + ACC oleh bendahara.
@@ -192,6 +412,8 @@ export async function daftarJadiInputter(tanggal: string) {
         ? {
             status: 'APPROVED',
             approved_by: profile.id,
+            approved_by_user_id: profile.id,
+            approved_by_name: profile.nama_kk,
             approved_at: new Date().toISOString(),
           }
         : { status: 'AKTIF' }),
@@ -608,7 +830,25 @@ export async function submitSesi(formData: FormData) {
 
   const admin = createAdminClient()
 
-  // 1. Save details first to ensure they are in DB before status change
+  // 1. Get current session to check status
+  const { data: sesi, error: sesiErr } = await admin
+    .from('jimpitan_sesi')
+    .select('status, total_nominal, jumlah_warga_bayar, input_by')
+    .eq('id', sesiId)
+    .maybeSingle()
+
+  if (sesiErr) return { error: sesiErr.message }
+  if (!sesi) return { error: 'Sesi tidak ditemukan' }
+
+  // 2. Prevent re-submission if already SUBMITTED or APPROVED or CANCELLED
+  if (sesi.status === 'SUBMITTED' || sesi.status === 'APPROVED' || sesi.status === 'CANCELLED') {
+    return { error: `Sesi sudah dalam status ${sesi.status}. Tidak dapat disubmit ulang.` }
+  }
+
+  // 3. Save details first to ensure they are in DB before status change
+  let calculatedTotal = 0
+  let calculatedCount = 0
+
   if (detailsJson) {
     try {
       const details: Record<string, { nominal: number; is_bayar: boolean }> = JSON.parse(detailsJson)
@@ -622,6 +862,14 @@ export async function submitSesi(formData: FormData) {
       if (profiles && profiles.length > 0) {
         const rows = profiles.map((p) => {
           const d = details[p.id]
+          const nominal = d?.nominal ?? 0
+          const isBayar = d?.is_bayar ?? false
+          
+          if (isBayar) {
+            calculatedTotal += nominal
+            calculatedCount += 1
+          }
+
           return {
             sesi_id: sesiId,
             profile_id: p.id,
@@ -629,9 +877,9 @@ export async function submitSesi(formData: FormData) {
             nama_kk_snapshot: p.nama_kk,
             blok_snapshot: p.blok,
             nomor_rumah_snapshot: p.nomor_rumah,
-            nominal: d?.nominal ?? 0,
-            is_bayar: d?.is_bayar ?? false,
-            status_bayar: d?.is_bayar ? 'BAYAR' : 'BELUM',
+            nominal: nominal,
+            is_bayar: isBayar,
+            status_bayar: isBayar ? 'BAYAR' : 'BELUM',
           }
         })
 
@@ -641,10 +889,50 @@ export async function submitSesi(formData: FormData) {
 
         if (upsertError) throw upsertError
       }
-    } catch (e: any) {
-      return { error: `Gagal menyimpan detail jimpitan: ${e.message}` }
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : String(e)
+      return { error: `Gagal menyimpan detail jimpitan: ${errorMessage}` }
     }
   }
+
+  // 4. Validation: Ensure at least one payer
+  if (calculatedCount === 0) {
+    return { error: 'Harus ada setidaknya satu warga yang membayar untuk submit sesi' }
+  }
+
+  // 5. Calculate attendance count
+  const { count: attendanceCount } = await admin
+    .from('ronda_attendance')
+    .select('*', { count: 'exact', head: true })
+    .eq('sesi_id', sesiId)
+
+  // 6. Update session status and totals, plus submitted_by info
+  const { error: updateError } = await admin
+    .from('jimpitan_sesi')
+    .update({
+      status: 'SUBMITTED',
+      total_nominal: calculatedTotal,
+      total_pendapatan: calculatedTotal,
+      jumlah_warga_bayar: calculatedCount,
+      jumlah_penjaga_hadir: attendanceCount ?? 0,
+      keadaan: keadaan,
+      catatan: catatan,
+      waktu_submit: new Date().toISOString(),
+      submitted_by_user_id: profile.id,
+      submitted_by_name: profile.nama_kk,
+      submitted_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', sesiId)
+
+  if (updateError) return { error: updateError.message }
+
+  revalidatePath('/dashboard/jimpitan')
+  revalidatePath('/dashboard/kas')
+  revalidatePath('/dashboard')
+  revalidatePath(`/dashboard/jimpitan/${sesiId}`)
+
+  return { success: true }
 }
 
 // =====================================================
@@ -653,31 +941,164 @@ export async function submitSesi(formData: FormData) {
 export async function accSesi(sesiId: string) {
   const profile = await getCurrentUser()
   if (!profile) return { error: 'Tidak terautentikasi' }
-  if (!['BENDAHARA', 'KETUA_RT', 'SUPERADMIN'].includes(profile.role)) {
-    return { error: 'Hanya bendahara/ketua yang boleh ACC' }
+  if (!['BENDAHARA', 'KETUA_RT', 'SUPERADMIN', 'SEKRETARIS'].includes(profile.role)) {
+    return { error: 'Hanya pengurus yang boleh ACC' }
   }
 
   const admin = createAdminClient()
-  const { error } = await admin
+  
+  // 1. Ambil data sesi lengkap
+  const { data: sesi } = await admin
+    .from('jimpitan_sesi')
+    .select('*')
+    .eq('id', sesiId)
+    .maybeSingle()
+
+  if (!sesi) return { error: 'Sesi tidak ditemukan' }
+  if (sesi.status !== 'SUBMITTED') return { error: 'Sesi harus dalam status Submitted untuk di-ACC' }
+  if (sesi.approved_by_user_id) {
+    return { error: 'Sesi sudah di-ACC sebelumnya' }
+  }
+
+  // 2. Ambil total dari jimpitan_detail untuk validasi (fallback mechanism) + update tagihan
+  const { data: details } = await admin
+    .from('jimpitan_detail')
+    .select('profile_id, nominal, is_bayar')
+    .eq('sesi_id', sesiId)
+
+  const calculatedTotal = (details ?? []).reduce((s, d: { nominal: number; is_bayar: boolean }) => s + Number(d.nominal), 0)
+  const calculatedCount = (details ?? []).filter((d: { nominal: number; is_bayar: boolean }) => d.is_bayar).length
+
+  // 3. Get attendance count
+  const { count: attendanceCount } = await admin
+    .from('ronda_attendance')
+    .select('*', { count: 'exact', head: true })
+    .eq('sesi_id', sesiId)
+
+  // 3.5 Update jimpitan_tagihan untuk setiap warga yang bayar di sesi ini
+  const periodeBulan = sesi.tanggal.slice(0, 8) + '01' // YYYY-MM-01
+  const detailBayar = (details ?? []).filter((d: { profile_id: string; nominal: number; is_bayar: boolean }) => d.is_bayar && Number(d.nominal) > 0)
+  
+  for (const detail of detailBayar) {
+    // Dapatkan tagihan yang ada untuk profile_id dan periode_bulan
+    const { data: tagihan } = await admin
+      .from('jimpitan_tagihan')
+      .select('*')
+      .eq('profile_id', detail.profile_id)
+      .eq('periode_bulan', periodeBulan)
+      .maybeSingle()
+
+    if (tagihan) {
+      // Update total_terbayar yang ada
+      const newTotalTerbayar = Number(tagihan.total_terbayar) + Number(detail.nominal)
+      let newStatus = 'CICIL'
+      if (newTotalTerbayar >= Number(tagihan.nominal_tagihan)) {
+        newStatus = newTotalTerbayar === Number(tagihan.nominal_tagihan) ? 'LUNAS' : 'LEBIH'
+      }
+      const kelebihanBaru = Math.max(0, newTotalTerbayar - Number(tagihan.nominal_tagihan))
+
+      await admin
+        .from('jimpitan_tagihan')
+        .update({
+          total_terbayar: newTotalTerbayar,
+          status: newStatus,
+          kelebihan: kelebihanBaru,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', tagihan.id)
+    } else {
+      // Buat tagihan baru jika belum ada (dapatkan nominal tagihan default dari profile)
+      const { data: profilePembayar } = await admin
+        .from('profiles')
+        .select('kategori_tarif')
+        .eq('id', detail.profile_id)
+        .maybeSingle()
+
+      const tarifDefault: Record<string, number> = { STANDAR: 3000, KURANG: 2000, ISTIMEWA: 5000 }
+      const nominalTagihan = tarifDefault[profilePembayar?.kategori_tarif ?? 'STANDAR'] ?? 3000
+
+      let newStatus = 'CICIL'
+      if (Number(detail.nominal) >= nominalTagihan) {
+        newStatus = Number(detail.nominal) === nominalTagihan ? 'LUNAS' : 'LEBIH'
+      }
+
+      const kelebihan = Math.max(0, Number(detail.nominal) - nominalTagihan)
+
+      await admin
+        .from('jimpitan_tagihan')
+        .insert({
+          profile_id: detail.profile_id,
+          periode_bulan: periodeBulan,
+          nominal_tagihan: nominalTagihan,
+          total_terbayar: Number(detail.nominal),
+          status: newStatus,
+          kelebihan: kelebihan
+        })
+    }
+  }
+
+  // 4. Buat transaksi kas (Pemasukan)
+  // Check for existing transaction using source_id = sesi.id to prevent duplicates
+  const { data: existingTrx } = await admin
+    .from('kas_transaksi')
+    .select('id')
+    .or(`trx_id_external.eq.JMP-${sesi.tanggal.replace(/-/g, '')},source_id.eq.${sesiId}`)
+    .maybeSingle()
+
+  let kasTransactionId: string | undefined
+  if (!existingTrx) {
+    const { data: trxData, error: trxError } = await admin
+      .from('kas_transaksi')
+      .insert({
+        trx_id_external: `JMP-${sesi.tanggal.replace(/-/g, '')}`,
+        source_id: sesiId,
+        tanggal: sesi.tanggal,
+        tipe: 'MASUK',
+        kategori: 'IURAN_BULANAN',
+        uraian: `Jimpitan ${formatTanggal(sesi.tanggal)}`,
+        nominal: calculatedTotal,
+        metode_bayar: 'TUNAI',
+        sumber_dana: 'JIMPITAN',
+        catatan: `Otomatis dari ACC jimpitan sesi ${sesi.id}`,
+        created_by: profile.id,
+      })
+      .select('id')
+      .single()
+    if (trxError) return { error: `Gagal membuat transaksi kas: ${trxError.message}` }
+    kasTransactionId = trxData?.id
+  } else {
+    kasTransactionId = existingTrx.id
+  }
+
+  // 5. Update status sesi menjadi APPROVED
+  const { error: updateError } = await admin
     .from('jimpitan_sesi')
     .update({
       status: 'APPROVED',
       approved_by: profile.id,
+      approved_by_user_id: profile.id,
+      approved_by_name: profile.nama_kk,
       approved_at: new Date().toISOString(),
+      kas_transaction_id: kasTransactionId,
+      total_nominal: calculatedTotal,
+      total_pendapatan: calculatedTotal,
+      jumlah_warga_bayar: calculatedCount,
+      jumlah_penjaga_hadir: attendanceCount ?? 0,
       updated_at: new Date().toISOString(),
     })
     .eq('id', sesiId)
-    .eq('status', 'SUBMITTED')
 
-  if (error) return { error: error.message }
+  if (updateError) return { error: updateError.message }
 
+  // 5. Revalidate semua halaman terkait
   revalidatePath('/dashboard/kas')
+  revalidatePath('/dashboard/jimpitan')
   revalidatePath('/dashboard')
-  revalidatePath('/dashboard/iuran')
   revalidatePath('/warga')
   revalidatePath('/warga/ronda')
   revalidatePath(`/warga/jimpitan/${sesiId}`)
   revalidatePath(`/dashboard/jimpitan/${sesiId}`)
+  
   return { success: true }
 }
 
@@ -797,6 +1218,8 @@ export async function tambahTransaksiKas(formData: FormData) {
   const sumberDana = (formData.get('sumber_dana') as string) || null
   const ditalangiOleh = (formData.get('ditalangi_oleh') as string)?.trim() || null
   const catatan = (formData.get('catatan') as string)?.trim() || null
+  const danaKhususId = (formData.get('dana_khusus_id') as string)?.trim()
+  const profileIdPembayaran = (formData.get('profile_id') as string)?.trim()
 
   // Validasi
   if (!['MASUK', 'KELUAR'].includes(tipe)) {
@@ -811,6 +1234,51 @@ export async function tambahTransaksiKas(formData: FormData) {
   }
 
   const admin = createAdminClient()
+
+  // If it's MERTI DUSUN / DANA KHUSUS, process it first
+  if (danaKhususId && profileIdPembayaran) {
+    // Get tagihan
+    const { data: tagihan } = await admin
+      .from('dana_khusus_tagihan')
+      .select('id')
+      .eq('dana_khusus_id', danaKhususId)
+      .eq('profile_id', profileIdPembayaran)
+      .single()
+    if (!tagihan) {
+      return { error: 'Tagihan tidak ditemukan untuk warga ini' }
+    }
+    // Get profile data
+    const { data: targetProfile } = await admin
+      .from('profiles')
+      .select('id, login_id, nama_kk')
+      .eq('id', profileIdPembayaran)
+      .single()
+    if (!targetProfile) {
+      return { error: 'Profile tidak ditemukan' }
+    }
+    // Insert payment
+    const { error: payErr } = await admin
+      .from('dana_khusus_pembayaran')
+      .insert({
+        dana_khusus_id: danaKhususId,
+        tagihan_id: tagihan.id,
+        profile_id: targetProfile.id,
+        login_id: targetProfile.login_id,
+        nominal,
+        metode: metodeBayar || 'TUNAI',
+        tanggal_bayar: tanggal,
+        catatan,
+        input_by: profile.id,
+        bukti_ref: `DK-${danaKhususId.slice(0, 8)}-${Date.now()}`,
+      })
+    if (payErr) {
+      return { error: 'Gagal mencatat pembayaran dana khusus' }
+    }
+    revalidatePath('/dashboard/dana-khusus')
+    revalidatePath(`/dashboard/dana-khusus/${danaKhususId}`)
+    revalidatePath('/warga/dana-khusus')
+  }
+
   const { error } = await admin.from('kas_transaksi').insert({
     tanggal,
     tipe,
@@ -1422,4 +1890,163 @@ export async function exportLaporanKasPDFData(formData: FormData): Promise<{
       detailRows,
     },
   }
+}
+
+// =====================================================
+// PENGURUS: KELOLA KELEBIHAN PEMBAYARAN JIMPITAN
+// =====================================================
+
+export async function setKelebihanTujuan(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+}> {
+  const profile = await getCurrentUser()
+  if (!profile) return { error: 'Tidak terautentikasi' }
+  if (!isPengurus(profile)) return { error: 'Hanya pengurus yang boleh mengelola kelebihan' }
+
+  const tagihanId = formData.get('tagihanId') as string
+  const tujuan = formData.get('tujuan') as string
+  const catatan = (formData.get('catatan') as string)?.trim() || null
+
+  if (!tagihanId || !tujuan) return { error: 'Data tidak lengkap' }
+  if (!['BULAN_DEPAN', 'HIBAH'].includes(tujuan)) return { error: 'Tujuan tidak valid' }
+
+  const admin = createAdminClient()
+  const { error } = await admin
+    .from('jimpitan_tagihan')
+    .update({ kelebihan_tujuan: tujuan, kelebihan_catatan: catatan, updated_at: new Date().toISOString() })
+    .eq('id', tagihanId)
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/dashboard/iuran')
+  return { success: true }
+}
+
+export async function pindahkanKelebihanKeBulanDepan(tagihanId: string): Promise<{
+  success?: boolean
+  error?: string
+}> {
+  const profile = await getCurrentUser()
+  if (!profile) return { error: 'Tidak terautentikasi' }
+  if (!isPengurus(profile)) return { error: 'Hanya pengurus yang boleh memindahkan kelebihan' }
+
+  const admin = createAdminClient()
+
+  // 1. Ambil tagihan sekarang
+  const { data: tagihanSekarang, error: errTagihan } = await admin
+    .from('jimpitan_tagihan')
+    .select('id, profile_id, periode_bulan, kelebihan, total_terbayar, nominal_tagihan')
+    .eq('id', tagihanId)
+    .single()
+  if (errTagihan) return { error: errTagihan.message }
+  if (!tagihanSekarang) return { error: 'Tagihan tidak ditemukan' }
+  if (!(tagihanSekarang.kelebihan > 0)) return { error: 'Tidak ada kelebihan untuk dipindahkan' }
+
+  // 2. Hitung periode bulan depan
+  const bulanIni = new Date(tagihanSekarang.periode_bulan)
+  const bulanDepan = new Date(bulanIni.getFullYear(), bulanIni.getMonth() + 1, 1)
+  const periodeBulanDepan = bulanDepan.toISOString().slice(0, 10)
+
+  // 3. Ambil profil untuk tarif default
+  const { data: profil, error: errProfil } = await admin
+    .from('profiles')
+    .select('kategori_tarif')
+    .eq('id', tagihanSekarang.profile_id)
+    .single()
+
+  const tarifDefault: Record<string, number> = { STANDAR: 15000, KURANG: 10000, ISTIMEWA: 20000 }
+  const nominalTagihanDefault = tarifDefault[profil?.kategori_tarif ?? 'STANDAR'] ?? 15000
+
+  // 4. Ambil atau buat tagihan bulan depan
+  const { data: tagihanDepan, error: errTagihanDepan } = await admin
+    .from('jimpitan_tagihan')
+    .select('*')
+    .eq('profile_id', tagihanSekarang.profile_id)
+    .eq('periode_bulan', periodeBulanDepan)
+    .maybeSingle()
+
+  if (errTagihanDepan && errTagihanDepan.code !== 'PGRST116') {
+    return { error: errTagihanDepan.message }
+  }
+
+  const kelebihan = tagihanSekarang.kelebihan
+  let newTotalTerbayarDepan
+  let newStatusDepan: 'BELUM' | 'CICIL' | 'LUNAS' | 'LEBIH' = 'BELUM'
+
+  if (tagihanDepan) {
+    newTotalTerbayarDepan = Number(tagihanDepan.total_terbayar) + kelebihan
+    if (newTotalTerbayarDepan === Number(tagihanDepan.nominal_tagihan)) {
+      newStatusDepan = 'LUNAS'
+    } else if (newTotalTerbayarDepan > Number(tagihanDepan.nominal_tagihan)) {
+      newStatusDepan = 'LEBIH'
+    } else if (newTotalTerbayarDepan > 0) {
+      newStatusDepan = 'CICIL'
+    }
+
+    const kelebihanBaruDepan = Math.max(0, newTotalTerbayarDepan - Number(tagihanDepan.nominal_tagihan))
+
+    const { error: updateErr } = await admin
+      .from('jimpitan_tagihan')
+      .update({
+        total_terbayar: newTotalTerbayarDepan,
+        status: newStatusDepan,
+        kelebihan: kelebihanBaruDepan,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', tagihanDepan.id)
+
+    if (updateErr) return { error: updateErr.message }
+  } else {
+    // Buat tagihan baru
+    newTotalTerbayarDepan = kelebihan
+    if (newTotalTerbayarDepan === nominalTagihanDefault) {
+      newStatusDepan = 'LUNAS'
+    } else if (newTotalTerbayarDepan > nominalTagihanDefault) {
+      newStatusDepan = 'LEBIH'
+    } else if (newTotalTerbayarDepan > 0) {
+      newStatusDepan = 'CICIL'
+    }
+
+    const { error: insertErr } = await admin
+      .from('jimpitan_tagihan')
+      .insert({
+        profile_id: tagihanSekarang.profile_id,
+        periode_bulan: periodeBulanDepan,
+        nominal_tagihan: nominalTagihanDefault,
+        total_terbayar: newTotalTerbayarDepan,
+        status: newStatusDepan,
+        kelebihan: Math.max(0, newTotalTerbayarDepan - nominalTagihanDefault),
+      })
+
+    if (insertErr) return { error: insertErr.message }
+  }
+
+  // 5. Kurangi total terbayar dan kelebihan di tagihan sekarang
+  const newTotalTerbayarSekarang = Number(tagihanSekarang.total_terbayar) - kelebihan
+  let newStatusSekarang: 'BELUM' | 'CICIL' | 'LUNAS' | 'LEBIH' = 'BELUM'
+  if (newTotalTerbayarSekarang === Number(tagihanSekarang.nominal_tagihan)) {
+    newStatusSekarang = 'LUNAS'
+  } else if (newTotalTerbayarSekarang > Number(tagihanSekarang.nominal_tagihan)) {
+    newStatusSekarang = 'LEBIH'
+  } else if (newTotalTerbayarSekarang > 0) {
+    newStatusSekarang = 'CICIL'
+  }
+
+  const { error: updateSekarangErr } = await admin
+    .from('jimpitan_tagihan')
+    .update({
+      total_terbayar: newTotalTerbayarSekarang,
+      status: newStatusSekarang,
+      kelebihan: 0,
+      kelebihan_tujuan: null,
+      kelebihan_catatan: `Dipindahkan ke bulan ${periodeBulanDepan}`,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', tagihanId)
+
+  if (updateSekarangErr) return { error: updateSekarangErr.message }
+
+  revalidatePath('/dashboard/iuran')
+  return { success: true }
 }

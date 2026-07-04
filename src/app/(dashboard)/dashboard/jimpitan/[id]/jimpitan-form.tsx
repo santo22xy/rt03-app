@@ -18,10 +18,10 @@ import {
 import { formatRupiah, formatTanggal } from '@/lib/format'
 import { toast } from 'sonner'
 import {
-  updateJimpitanDetail, bulkSetBelumBayar, toggleKehadiran,
-  submitSesi, swapPenjaga, swapAnggota,
-  accSesi, rejectSesi,
-} from '../../jimpitan-actions'
+    updateJimpitanDetail, bulkSetBelumBayar, toggleKehadiran,
+    submitSesi, swapPenjaga, swapAnggota,
+    accSesi, rejectSesi, cancelJimpitanSesi,
+  } from '../../jimpitan-actions'
 
 type Profile = {
   id: string
@@ -77,6 +77,15 @@ export function JimpitanForm({
   approvedAt,
   currentUserRole,
   currentUserName,
+  createdByName,
+  createdByRole,
+  createdAt,
+  createdFrom,
+  submittedByName,
+  submittedAt,
+  cancelledByName,
+  cancelledAt,
+  cancelReason,
 }: {
   sesiId: string
   tanggal: string
@@ -93,8 +102,16 @@ export function JimpitanForm({
   approvedAt?: string | null
   currentUserRole: string
   currentUserName?: string | null
+  createdByName?: string | null
+  createdByRole?: string | null
+  createdAt?: string | null
+  createdFrom?: string | null
+  submittedByName?: string | null
+  submittedAt?: string | null
+  cancelledByName?: string | null
+  cancelledAt?: string | null
+  cancelReason?: string | null
 }) {
-  const isLocked = status === 'APPROVED' || status === 'SUBMITTED'
   const [isPending, startTransition] = useTransition()
 
   // State: detail jimpitan
@@ -123,7 +140,18 @@ export function JimpitanForm({
   const [swapPenggantiId, setSwapPenggantiId] = useState('')
   const [swapKeterangan, setSwapKeterangan] = useState('')
 
-  // Group profiles by blok
+  const [showDebug, setShowDebug] = useState(false)
+  const [cancelOpen, setCancelOpen] = useState(false)
+  const [cancelReasonInput, setCancelReasonInput] = useState('')
+
+  // Check if current user is pengurus
+  const isPengurus = ['BENDAHARA', 'KETUA_RT', 'SUPERADMIN', 'SEKRETARIS', 'PENGURUS'].includes(currentUserRole)
+
+  // Debug Info for user
+  const canSubmit = status === 'DRAFT' || status === 'AKTIF'
+  const canApprove = status === 'SUBMITTED' && isPengurus
+  const canCancel = (status === 'DRAFT' || status === 'AKTIF' || status === 'SUBMITTED') && isPengurus
+  const isLocked = status === 'APPROVED' || status === 'SUBMITTED' || status === 'CANCELLED'
   const grouped = useMemo(() => {
     const g: Record<string, Profile[]> = {}
     profiles
@@ -292,9 +320,6 @@ export function JimpitanForm({
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectAlasan, setRejectAlasan] = useState('')
 
-  // Hanya bendahara/ketua/superadmin yang boleh ACC/REJECT
-  const canValidate = ['BENDAHARA', 'KETUA_RT', 'SUPERADMIN'].includes(currentUserRole)
-
   function doSubmit() {
     setSubmitOpen(false)
     startTransition(async () => {
@@ -342,6 +367,24 @@ export function JimpitanForm({
     })
   }
 
+  function doCancel() {
+    if (!cancelReasonInput.trim()) {
+      toast.error('Alasan pembatalan wajib diisi')
+      return
+    }
+    setCancelOpen(false)
+    const alasan = cancelReasonInput
+    setCancelReasonInput('')
+    startTransition(async () => {
+      const fd = new FormData()
+      fd.append('sesiId', sesiId)
+      fd.append('alasan', alasan)
+      const res = await cancelJimpitanSesi(fd)
+      if (res?.error) toast.error(res.error)
+      else toast.success('Sesi berhasil dibatalkan')
+    })
+  }
+
   // Generate chat format
   const chatFormat = useMemo(() => {
     const lines: string[] = []
@@ -381,7 +424,142 @@ export function JimpitanForm({
 
   return (
     <div className="space-y-4">
-      {/* Penjaga Jadwal + Absen Anggota (gabungan) */}
+      {/* Debug Panel */}
+      <div className="flex justify-end">
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          onClick={() => setShowDebug(!showDebug)}
+          className="h-7 px-2 text-[10px] text-muted-foreground hover:text-primary"
+        >
+          <AlertTriangle className="w-3 h-3 mr-1" />
+          {showDebug ? 'Hide Debug' : 'Show Debug'}
+        </Button>
+      </div>
+      {showDebug && (
+        <Card className="border-0 shadow-sm ring-1 ring-blue-200/60 bg-blue-50/50 overflow-hidden">
+          <CardContent className="p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Debug Info</p>
+              <Button variant="ghost" size="sm" onClick={() => setShowDebug(false)} className="h-6 px-2 text-[10px]">
+                Close
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+              <div className="text-slate-500">Status:</div>
+              <div className="font-mono font-bold text-blue-700">{status}</div>
+              
+              <div className="text-slate-500">Role:</div>
+              <div className="font-mono font-bold text-blue-700">{currentUserRole}</div>
+              
+              <div className="text-slate-500">User:</div>
+              <div className="font-mono">{currentUserName || '-'}</div>
+
+              <div className="text-slate-500">Is Locked:</div>
+              <div className={`font-mono font-bold ${isLocked ? 'text-rose-600' : 'text-emerald-600'}`}>{isLocked ? 'YES' : 'NO'}</div>
+
+              <div className="text-slate-500">Can Submit:</div>
+              <div className={`font-mono font-bold ${canSubmit ? 'text-emerald-600' : 'text-slate-400'}`}>{canSubmit ? 'YES' : 'NO'}</div>
+
+              <div className="text-slate-500">Can Approve:</div>
+              <div className={`font-mono font-bold ${canApprove ? 'text-emerald-600' : 'text-slate-400'}`}>{canApprove ? 'YES' : 'NO'}</div>
+
+              <div className="text-slate-500">Can Cancel:</div>
+              <div className={`font-mono font-bold ${canCancel ? 'text-emerald-600' : 'text-slate-400'}`}>{canCancel ? 'YES' : 'NO'}</div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Audit Info */}
+      <Card className="border-0 shadow-sm ring-1 ring-slate-200/60 bg-slate-50 overflow-hidden">
+        <CardContent className="p-4 space-y-3">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700">Riwayat Sesi</p>
+          <div className="grid grid-cols-1 gap-2 text-xs">
+            {/* Created By */}
+            {createdByName && (
+              <div className="flex items-start gap-2">
+                <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                  <Users className="w-3.5 h-3.5 text-blue-700" />
+                </div>
+                <div>
+                  <p className="text-slate-800 font-semibold">
+                    Dibuat oleh {createdByName}
+                    {createdByRole && <span className="text-slate-500 font-normal ml-1">({createdByRole})</span>}
+                  </p>
+                  {createdAt && (
+                    <p className="text-slate-500 text-[10px]">
+                      {new Date(createdAt).toLocaleString('id-ID', {
+                        day: 'numeric', month: 'short', year: 'numeric',
+                        hour: '2-digit', minute: '2-digit',
+                      })}
+                      {createdFrom && <span className="ml-1">({createdFrom})</span>}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+            {/* Submitted By */}
+            {submittedByName && (
+              <div className="flex items-start gap-2">
+                <div className="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                  <MessageCircle className="w-3.5 h-3.5 text-amber-700" />
+                </div>
+                <div>
+                  <p className="text-slate-800 font-semibold">Disubmit oleh {submittedByName}</p>
+                  {submittedAt && (
+                    <p className="text-slate-500 text-[10px]">
+                      {new Date(submittedAt).toLocaleString('id-ID', {
+                        day: 'numeric', month: 'short', year: 'numeric',
+                        hour: '2-digit', minute: '2-digit',
+                      })}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+            {/* Cancelled By */}
+            {cancelledByName && (
+              <div className="flex items-start gap-2">
+                <div className="w-6 h-6 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+                  <XCircle className="w-3.5 h-3.5 text-rose-700" />
+                </div>
+                <div>
+                  <p className="text-slate-800 font-semibold">Dibatalkan oleh {cancelledByName}</p>
+                  {cancelledAt && (
+                    <p className="text-slate-500 text-[10px]">
+                      {new Date(cancelledAt).toLocaleString('id-ID', {
+                        day: 'numeric', month: 'short', year: 'numeric',
+                        hour: '2-digit', minute: '2-digit',
+                      })}
+                    </p>
+                  )}
+                  {cancelReason && (
+                    <p className="text-rose-600 text-[11px] mt-0.5 bg-rose-50 px-2 py-1 rounded border border-rose-200">
+                      Alasan: {cancelReason}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Cancel Button */}
+          {canCancel && (
+            <div className="pt-3 border-t border-slate-200 mt-3">
+              <Button
+                variant="outline"
+                onClick={() => setCancelOpen(true)}
+                className="w-full border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+              >
+                <XCircle className="w-4 h-4 mr-2" />
+                Batalkan Sesi Ini
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {(penjagaJadwal || anggotaKelompok.length > 0) && (
         <Card className="border-0 shadow-md ring-1 ring-purple-200/60 bg-gradient-to-br from-purple-50 via-violet-50 to-fuchsia-50 overflow-hidden">
           <CardContent className="p-4 space-y-3">
@@ -842,7 +1020,7 @@ export function JimpitanForm({
       </div>
 
       {/* Submit Section */}
-      {status === 'AKTIF' && (
+      {canSubmit && (
         <Card className="border-0 shadow-md ring-1 ring-emerald-200/60 bg-gradient-to-r from-emerald-50 to-teal-50">
           <CardContent className="p-4 space-y-3">
             <p className="text-xs font-bold uppercase text-emerald-700">Submit Sesi</p>
@@ -910,7 +1088,7 @@ export function JimpitanForm({
       {/* ============================================ */}
       {/* VALIDASI SESI — Panel khusus Bendahara/Ketua */}
       {/* ============================================ */}
-      {canValidate && status === 'SUBMITTED' && (
+      {canApprove && (
         <Card className="border-0 shadow-lg ring-2 ring-amber-300 bg-gradient-to-br from-amber-50 via-yellow-50 to-orange-50 overflow-hidden">
           <CardContent className="p-5 space-y-4">
             <div className="flex items-start gap-3">
@@ -1308,6 +1486,79 @@ export function JimpitanForm({
                 <>
                   <XCircle className="w-4 h-4" />
                   Tolak Sesi
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Konfirmasi Batalkan Sesi */}
+      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="mx-auto w-14 h-14 rounded-full bg-gradient-to-br from-rose-400 to-red-600 flex items-center justify-center mb-1 shadow-lg shadow-rose-500/30">
+              <XCircle className="w-7 h-7 text-white" />
+            </div>
+            <DialogTitle className="text-center">Batalkan Sesi Ini?</DialogTitle>
+            <DialogDescription className="text-center">
+              Sesi akan diubah ke status CANCELLED dan tidak bisa diakses lagi oleh petugas
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 my-2">
+            <div>
+              <label className="text-xs font-semibold text-slate-700 mb-1.5 block">
+                Alasan pembatalan <span className="text-rose-600">*</span>
+              </label>
+              <Textarea
+                value={cancelReasonInput}
+                onChange={(e) => setCancelReasonInput(e.target.value)}
+                placeholder="Misal: Sesi dibuat oleh warga yang bukan petugas, atau tanggal salah."
+                rows={4}
+                className="text-sm"
+                autoFocus
+              />
+            </div>
+
+            {status === 'APPROVED' && (
+              <div className="flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-amber-800 leading-relaxed">
+                  <span className="font-semibold">Peringatan:</span> Sesi ini sudah di-ACC dan masuk kas!
+                  Anda harus melakukan koreksi manual di transaksi kas setelah membatalkan.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="sm:justify-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setCancelOpen(false)
+                setCancelReasonInput('')
+              }}
+              disabled={isPending}
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              onClick={doCancel}
+              disabled={isPending || !cancelReasonInput.trim()}
+              variant="destructive"
+            >
+              {isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Memproses...
+                </>
+              ) : (
+                <>
+                  <XCircle className="w-4 h-4" />
+                  Ya, Batalkan Sesi
                 </>
               )}
             </Button>
