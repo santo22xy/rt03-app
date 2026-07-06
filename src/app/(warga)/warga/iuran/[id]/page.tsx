@@ -3,7 +3,7 @@ import { notFound, redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { ArrowLeft, Receipt, CheckCircle2, Clock, AlertCircle, Wallet, HandCoins, Smartphone, Users, Calendar, FileText } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { createAdminClient } from '@/lib/supabase/server'
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { formatTanggal, formatRupiah, getMonthName } from '@/lib/format'
 
 export const dynamic = 'force-dynamic'
@@ -30,6 +30,7 @@ type Pembayaran = {
   catatan: string | null
   created_at: string
   created_by: string | null
+  nota_url: string | null
 }
 
 const METODE_META: Record<string, { label: string; icon: React.ReactNode; color: string; bg: string; ringColor: string }> = {
@@ -76,12 +77,36 @@ export default async function TagihanDetailPage({
 }) {
   const { id } = await params
 
+  const admin = createAdminClient()
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get('warga_session')?.value
-  if (!sessionToken) redirect('/login')
+  
+  let profileId: string | null = null
+  
+  if (sessionToken) {
+    // Warga login normal
+    const { data: pid } = await admin.rpc('get_warga_from_session', {
+      p_token: sessionToken,
+    })
+    if (pid) {
+      profileId = pid
+    }
+  } else {
+    // Dual-role: pengurus yang mengakses /warga
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await admin
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .single()
+      if (profile) {
+        profileId = profile.id
+      }
+    }
+  }
 
-  const admin = createAdminClient()
-  const { data: profileId } = await admin.rpc('get_warga_from_session', { p_token: sessionToken })
   if (!profileId) redirect('/login')
 
   // Ambil profile singkat (perlu login_id untuk query kas_transaksi)
@@ -130,7 +155,7 @@ export default async function TagihanDetailPage({
   // 1) kas_transaksi (cicilan titip/transfer manual) — by login_id
   const { data: kasList } = await admin
     .from('kas_transaksi')
-    .select('id, tanggal, kategori, uraian, nominal, metode_bayar, catatan, created_at')
+    .select('id, tanggal, kategori, uraian, nominal, metode_bayar, catatan, created_at, nota_url')
     .eq('tipe', 'MASUK')
     .eq('kategori', 'IURAN_BULANAN')
     .eq('login_id', profile.login_id)
@@ -169,6 +194,7 @@ export default async function TagihanDetailPage({
     tanggal: string
     created_at: string
     created_by: string | null
+    nota_url: string | null
   }
 
   const riwayats: RiwayatRow[] = []
@@ -212,6 +238,7 @@ export default async function TagihanDetailPage({
       tanggal: k.tanggal,
       created_at: k.created_at,
       created_by: null,
+      nota_url: k.nota_url || null,
     })
   }
 
@@ -268,6 +295,7 @@ export default async function TagihanDetailPage({
     catatan: r.catatan,
     created_at: r.created_at,
     created_by: r.created_by,
+    nota_url: r.nota_url,
   }))
 
   const sisa = tagihan.nominal - tagihan.total_terbayar
@@ -507,6 +535,17 @@ export default async function TagihanDetailPage({
                             <FileText className="w-3 h-3 shrink-0" />
                             Ref: <span className="font-mono font-semibold">{p.bukti_ref}</span>
                           </p>
+                        )}
+                        {p.nota_url && (
+                          <a
+                            href={p.nota_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-blue-700 hover:text-blue-900 flex items-center gap-1.5"
+                          >
+                            <FileText className="w-3 h-3 shrink-0" />
+                            Lihat Nota / Bukti
+                          </a>
                         )}
                       </div>
 

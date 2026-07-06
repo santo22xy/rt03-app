@@ -6,6 +6,71 @@ import { cookies } from 'next/headers'
 import { formatTanggal } from '@/lib/format'
 
 // =====================================================
+// ATTACHMENT HELPERS
+// =====================================================
+const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024 // 5 MB
+const ALLOWED_ATTACHMENT_MIME = [
+  'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'
+]
+
+function sanitizeAttachmentExt(file: File): string {
+  const fromName = file.name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '')
+  if (fromName && fromName.length <= 5) return fromName
+  if (file.type === 'image/png') return 'png'
+  if (file.type === 'image/webp') return 'webp'
+  if (file.type === 'image/gif') return 'gif'
+  if (file.type === 'application/pdf') return 'pdf'
+  return 'jpg'
+}
+
+async function uploadAttachment(file: File | null): Promise<string | null> {
+  if (!file || file.size === 0) return null
+  if (file.size > MAX_ATTACHMENT_SIZE) {
+    throw new Error('Ukuran file max 5 MB')
+  }
+  if (!ALLOWED_ATTACHMENT_MIME.includes(file.type)) {
+    throw new Error('Format file harus JPG, PNG, WebP, GIF, atau PDF')
+  }
+
+  const ext = sanitizeAttachmentExt(file)
+  const filename = `attachment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+
+  const admin = createAdminClient()
+  const { error } = await admin.storage
+    .from('attachments')
+    .upload(filename, file, {
+      contentType: file.type,
+      upsert: false,
+      cacheControl: '3600',
+    })
+
+  if (error) {
+    throw new Error('Upload file gagal: ' + error.message)
+  }
+
+  const { data: urlData } = admin.storage
+    .from('attachments')
+    .getPublicUrl(filename)
+
+  return urlData.publicUrl
+}
+
+async function deleteAttachment(url: string | null | undefined): Promise<void> {
+  if (!url) return
+  try {
+    const marker = '/attachments/'
+    const idx = url.indexOf(marker)
+    if (idx === -1) return
+    const path = url.slice(idx + marker.length).split('?')[0]
+    if (!path) return
+    const admin = createAdminClient()
+    await admin.storage.from('attachments').remove([path])
+  } catch {
+    // best-effort cleanup
+  }
+}
+
+// =====================================================
 // FETCH FOR JIMPITAN LIST PAGE
 // =====================================================
 export async function getJimpitanListData(month: number, year: number) {
@@ -671,8 +736,19 @@ export async function updateJimpitanDetail(formData: FormData) {
 }
 
 // =====================================================
-// BULK: tandai semua warga BELUM BAYAR
+// FETCH ALL ACTIVE RESIDENTS (for manual input/bulk actions)
 // =====================================================
+export async function getActiveResidents() {
+  const admin = createAdminClient()
+  const { data: profiles } = await admin
+    .from('profiles')
+    .select('id, nama_kk, login_id, blok, nomor_rumah')
+    .eq('is_active', true)
+    .not('blok', 'is', null)
+    .not('nomor_rumah', 'is', null)
+    .neq('blok', 'X')
+  return profiles ?? []
+}
 export async function bulkSetBelumBayar(sesiId: string) {
   const profile = await getCurrentWarga() || await getCurrentUser()
   if (!profile) return { error: 'Tidak terautentikasi' }
@@ -1134,8 +1210,126 @@ export async function rejectSesi(sesiId: string, alasan: string) {
 }
 
 // =====================================================
-// PENGURUS: KELOLA JADWAL RONDA
+// PENGURUS: INPUT MANUAL JIMPITAN (untuk tanggal lampau)
+// Membutuhkan ACC dari Bendahara
 // =====================================================
+export async function pengurusInputJimpitanManual(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+  sesiId?: string
+}> {
+  const profile = await getCurrentUser()
+  if (!profile) return { error: 'Anda belum login sebagai pengurus' }
+  if (!['KETUA_RT', 'BENDAHARA', 'SEKRETARIS'].includes(profile.role)) {
+    return { error: 'Hanya Ketua, Sekretaris, atau Bendahara yang boleh input manual' }
+  }
+
+  const tanggal = formData.get('tanggal') as string
+  const detailsJson = formData.get('details') as string | null
+  if (!tanggal) return { error: 'Tanggal wajib dipilih' }
+  if (!detailsJson) return { error: 'Data detail jimpitan wajib diisi' }
+
+  let details: Array<{ profileId: string; nominal: number; isBayar: boolean }> = []
+  try {
+    details = JSON.parse(detailsJson)
+  } catch (e) {
+    return { error: 'Format data detail tidak valid' }
+  }
+
+  const admin = createAdminClient()
+
+  // 1. Cek apakah sudah ada sesi AKTIF/SUBMITTED untuk tanggal ini
+  const { data: existing } = await admin
+    .from('jimpitan_sesi')
+    .select('id, status')
+    .eq('tanggal', tanggal)
+    .in('status', ['AKTIF', 'SUBMITTED', 'DRAFT'])
+    .maybeSingle()
+
+  if (existing) {
+    return { error: `Sesi jimpitan tanggal ini sudah ada (Status: ${existing.status}).` }
+  }
+
+  // 2. Buat sesi baru dengan status SUBMITTED agar perlu ACC
+  const { data: sesi, error: sesiErr } = await admin
+    .from('jimpitan_sesi')
+    .insert({
+      tanggal,
+      waktu_mulai: new Date().toISOString(),
+      status: 'SUBMITTED',
+      input_by: profile.id,
+      nama_inputter_snapshot: profile.nama_kk,
+      blok_inputter_snapshot: profile.blok,
+      created_by_user_id: profile.id,
+      created_by_name: profile.nama_kk,
+      created_by_role: profile.role,
+      created_from: 'dashboard_pengurus',
+      submitted_by_user_id: profile.id,
+      submitted_by_name: profile.nama_kk,
+      submitted_at: new Date().toISOString(),
+    })
+    .select('id')
+    .single()
+
+  if (sesiErr || !sesi) {
+    return { error: sesiErr?.message || 'Gagal membuat sesi jimpitan manual' }
+  }
+
+  const sesiId = sesi.id
+
+  // 3. Ambil data profile untuk snapshot
+  const profileIds = details.map(d => d.profileId)
+  const { data: profiles, error: profilesErr } = await admin
+    .from('profiles')
+    .select('id, nama_kk, login_id')
+    .in('id', profileIds)
+
+  if (profilesErr) {
+    await admin.from('jimpitan_sesi').delete().eq('id', sesiId)
+    return { error: `Gagal mengambil data warga: ${profilesErr.message}` }
+  }
+  if (!profiles) {
+    await admin.from('jimpitan_sesi').delete().eq('id', sesiId)
+    return { error: 'Data warga tidak ditemukan' }
+  }
+
+  // 4. Insert detail
+  const detailRows = details.map(d => {
+    const p = profiles.find(prof => prof.id === d.profileId)
+    if (!p) return null
+    return {
+      sesi_id: sesiId,
+      profile_id: p.id,
+      login_id: p.login_id,
+      nama_kk_snapshot: p.nama_kk,
+      nominal: d.nominal,
+      is_bayar: d.isBayar,
+      status_bayar: d.isBayar ? 'BAYAR' : 'BELUM',
+    }
+  }).filter(Boolean)
+
+  if (detailRows.length === 0) {
+    await admin.from('jimpitan_sesi').delete().eq('id', sesiId)
+    return { error: 'Tidak ada data detail yang valid untuk dimasukkan' }
+  }
+
+  const { error: detailErr } = await admin
+    .from('jimpitan_detail')
+    .insert(detailRows)
+
+  if (detailErr) {
+    await admin.from('jimpitan_sesi').delete().eq('id', sesiId)
+    return { error: `Gagal memasukkan detail: ${detailErr.message}` }
+  }
+
+  revalidatePath('/dashboard/jimpitan')
+  revalidatePath('/dashboard/kas')
+  revalidatePath('/dashboard')
+  revalidatePath(`/dashboard/jimpitan/${sesiId}`)
+
+  return { success: true, sesiId }
+}
+
 export async function tambahJadwalRonda(formData: FormData) {
   const profile = await getCurrentUser()
   if (!profile) return { error: 'Tidak terautentikasi' }
@@ -1220,6 +1414,15 @@ export async function tambahTransaksiKas(formData: FormData) {
   const catatan = (formData.get('catatan') as string)?.trim() || null
   const danaKhususId = (formData.get('dana_khusus_id') as string)?.trim()
   const profileIdPembayaran = (formData.get('profile_id') as string)?.trim()
+  const notaFile = formData.get('nota') as File | null
+
+  // Upload nota
+  let notaUrl: string | null = null
+  try {
+    notaUrl = await uploadAttachment(notaFile)
+  } catch (e) {
+    return { error: (e as Error).message }
+  }
 
   // Validasi
   if (!['MASUK', 'KELUAR'].includes(tipe)) {
@@ -1291,6 +1494,7 @@ export async function tambahTransaksiKas(formData: FormData) {
     status_talangan: sumberDana === 'DITALANGI' ? 'BELUM_DIGANTI' : null,
     catatan,
     created_by: profile.nama_kk ?? profile.role,
+    nota_url: notaUrl,
   })
 
   if (error) return { error: error.message }

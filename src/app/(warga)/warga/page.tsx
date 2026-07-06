@@ -242,6 +242,7 @@ export default async function WargaHomePage() {
         icon={<Receipt className="w-4 h-4" />}
         iconBgClass="bg-emerald-100"
         iconColorClass="text-emerald-600"
+        defaultOpen={false}
       >
         <div className="space-y-3 pt-2">
           {/* 3 Stats: Tagihan / Dibayar / Sisa */}

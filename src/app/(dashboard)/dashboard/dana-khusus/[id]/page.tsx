@@ -28,10 +28,11 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
     .eq('dana_khusus_id', id)
     .order('login_id', { ascending: true })
 
-  if (tagihanErr) return notFound()
+  // Don't return 404 if tagihanErr, just use empty list
+  const tagihanListSafe = tagihanList ?? []
 
   // Ambil profil lengkap
-  const profileIds = (tagihanList ?? []).map(t => t.profile_id)
+  const profileIds = tagihanListSafe.map(t => t.profile_id)
   const { data: profiles } = await admin
     .from('profiles')
     .select('id, login_id, nama_kk, blok, nomor_rumah, no_hp')
@@ -46,7 +47,7 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
     .order('tanggal_bayar', { ascending: false })
     .order('created_at', { ascending: false })
 
-  const enrichedTagihan = (tagihanList ?? [])
+  const enrichedTagihan = tagihanListSafe
     .map(t => ({ ...t, profile: profileMap.get(t.profile_id) }))
     .sort((a, b) => {
       const ba = a.profile?.blok ?? 'Z'

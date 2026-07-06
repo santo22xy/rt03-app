@@ -35,6 +35,7 @@ export type KasTransaksiItem = {
   catatan: string | null
   created_at: string
   created_by?: string | null
+  nota_url: string | null
 }
 
 type Props = {
@@ -215,6 +216,16 @@ export function KasDateGroup({
                     </div>
                     {t.catatan && (
                       <p className="text-[10px] text-muted-foreground italic mt-0.5 line-clamp-1">💬 {t.catatan}</p>
+                    )}
+                    {t.nota_url && (
+                      <a
+                        href={t.nota_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-blue-600 hover:text-blue-800 mt-0.5 inline-flex items-center gap-1"
+                      >
+                        📎 Lihat Nota
+                      </a>
                     )}
                   </div>
                   <div className="text-right shrink-0">

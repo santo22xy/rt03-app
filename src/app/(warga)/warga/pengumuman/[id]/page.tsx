@@ -4,7 +4,7 @@ import { cookies } from 'next/headers'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ArrowLeft, Megaphone, Calendar, ChevronRight, MegaphoneOff, Pin } from 'lucide-react'
-import { createAdminClient } from '@/lib/supabase/server'
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { formatTanggal } from '@/lib/format'
 import { ImageLightbox } from '../image-lightbox'
 
@@ -44,14 +44,36 @@ export default async function PengumumanDetailPage({
 }) {
   const { id } = await params
 
+  const admin = createAdminClient()
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get('warga_session')?.value
-  if (!sessionToken) redirect('/login')
+  
+  let profileId: string | null = null
+  
+  if (sessionToken) {
+    // Warga login normal
+    const { data: pid } = await admin.rpc('get_warga_from_session', {
+      p_token: sessionToken,
+    })
+    if (pid) {
+      profileId = pid
+    }
+  } else {
+    // Dual-role: pengurus yang mengakses /warga
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await admin
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .single()
+      if (profile) {
+        profileId = profile.id
+      }
+    }
+  }
 
-  const admin = createAdminClient()
-  const { data: profileId } = await admin.rpc('get_warga_from_session', {
-    p_token: sessionToken,
-  })
   if (!profileId) redirect('/login')
 
   // Ambil pengumuman by id (hanya yang published - warga tidak boleh lihat draft)

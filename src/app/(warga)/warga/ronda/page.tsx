@@ -1,24 +1,47 @@
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { cookies } from 'next/headers'
 import { Calendar, Shield, HandCoins, ChevronRight, Users, Clock, CheckCircle2 } from 'lucide-react'
-import { createAdminClient } from '@/lib/supabase/server'
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { DaftarInputter } from './daftar-inputter'
 import { JadwalListWarga } from './jadwal-list-warga'
 
 export const dynamic = 'force-dynamic'
 
 export default async function WargaRondaPage() {
+  const admin = createAdminClient()
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get('warga_session')?.value
-  if (!sessionToken) return null
+  
+  let profileId: string | null = null
+  
+  if (sessionToken) {
+    // Warga login normal
+    const { data: pid } = await admin.rpc('get_warga_from_session', {
+      p_token: sessionToken,
+    })
+    if (pid) {
+      profileId = pid
+    }
+  } else {
+    // Dual-role: pengurus yang mengakses /warga
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await admin
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .single()
+      if (profile) {
+        profileId = profile.id
+      }
+    }
+  }
 
-  const admin = createAdminClient()
-  const { data: profileId } = await admin.rpc('get_warga_from_session', {
-    p_token: sessionToken,
-  })
-  if (!profileId) return null
+  if (!profileId) redirect('/login')
 
   const { data: profile } = await admin
     .from('profiles')

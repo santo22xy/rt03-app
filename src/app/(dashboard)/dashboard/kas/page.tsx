@@ -34,6 +34,7 @@ type KasTransaksi = {
   catatan: string | null
   created_by: string | null
   created_at: string
+  nota_url: string | null
 }
 
 export default async function KasPage({
@@ -51,7 +52,7 @@ export default async function KasPage({
   // Ambil semua transaksi (max 100 terakhir) - filter di server untuk hemat data
   let query = supabase
     .from('kas_transaksi')
-    .select('id, tanggal, tipe, kategori, uraian, nominal, login_id, metode_bayar, sumber_dana, ditalangi_oleh, status_talangan, catatan, created_by, created_at')
+    .select('id, tanggal, tipe, kategori, uraian, nominal, login_id, metode_bayar, sumber_dana, ditalangi_oleh, status_talangan, catatan, created_by, created_at, nota_url')
     .order('tanggal', { ascending: false })
     .order('created_at', { ascending: false })
     .limit(200)

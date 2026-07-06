@@ -1,5 +1,6 @@
-import { createAdminClient } from '@/lib/supabase/server'
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { formatRupiah } from '@/lib/format'
@@ -10,13 +11,41 @@ export const dynamic = 'force-dynamic'
 
 export default async function WargaDanaKhususPage() {
   const admin = createAdminClient()
-  const { data: { user } } = await admin.auth.getUser()
-  if (!user) redirect('/login')
+  const cookieStore = await cookies()
+  const sessionToken = cookieStore.get('warga_session')?.value
+  
+  let profileId: string | null = null
+  
+  if (sessionToken) {
+    // Warga login normal
+    const { data: pid } = await admin.rpc('get_warga_from_session', {
+      p_token: sessionToken,
+    })
+    if (pid) {
+      profileId = pid
+    }
+  } else {
+    // Dual-role: pengurus yang mengakses /warga
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await admin
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .single()
+      if (profile) {
+        profileId = profile.id
+      }
+    }
+  }
+
+  if (!profileId) redirect('/login')
 
   const { data: profile } = await admin
     .from('profiles')
     .select('id, login_id, nama_kk')
-    .eq('id', user.id)
+    .eq('id', profileId)
     .single()
 
   if (!profile) redirect('/login')

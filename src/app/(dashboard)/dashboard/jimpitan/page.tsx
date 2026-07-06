@@ -6,12 +6,14 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
-  HandCoins, ArrowRight, CheckCircle2, Clock, ChevronLeft, ChevronRight } from 'lucide-react'
+  HandCoins, ArrowRight, CheckCircle2, Clock, ChevronLeft, ChevronRight, ShieldAlert
+} from 'lucide-react'
 import { formatRupiah, formatTanggal } from '@/lib/format'
 import { getNextSaturdays } from '@/lib/ronda'
 import { BuatSesiForm } from './buat-sesi-form'
 import { PendingAccList } from './pending-acc-list'
 import { getJimpitanListData } from '../jimpitan-actions'
+import { ManualJimpitanForm } from './manual-jimpitan-form'
 
 const roleLabelMap: Record<string, string> = {
   KETUA_RT: 'Ketua RT',
@@ -113,48 +115,39 @@ export default function JimpitanListPage({
         </CardContent>
       </Card>
 
-      {/* Mode Pengurus - Buat sesi manual (untuk uji coba alur di luar window)
+      {/* Mode Pengurus */}
       {isPengurus && (
-        <Card className="overflow-hidden border-0 shadow-md ring-1 ring-amber-200 bg-gradient-to-br from-amber-50 to-orange-50">
-          <CardContent className="p-5">
-            <div className="flex items-start gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
-                <ShieldAlert className="w-5 h-5 text-white" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-bold text-amber-900">
-                  Mode Pengurus — Uji Coba Alur
-                </p>
-                <p className="text-xs text-amber-700 mt-1 leading-relaxed">
-                  Anda login sebagai <span className="font-bold">{profile?.role}</span>.
-                  Form ini memungkinkan pengurus membuat sesi jimpitan untuk tanggal berapapun
-                  (di luar window) untuk menguji alur input sebelum hari H. Untuk warga biasa,
-                  form ini tidak akan muncul.
-                </p>
-              </div>
-            </div>
-            <BuatSesiForm roleLabel={roleLabelMap[profile?.role ?? ''] ?? 'Pengurus'}>
-              <div>
-                <label className="text-xs font-semibold text-amber-900 mb-1.5 flex items-center gap-1.5">
-                  <Calendar className="w-3 h-3" />
-                  Pilih Tanggal Sesi (bebas, tidak harus Sabtu)
-                </label>
-                <select
-                  name="tanggal"
-                  required
-                  className="w-full px-3 py-2 text-sm border border-amber-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  defaultValue={getNextSaturdays(4)[0]?.value ?? ''}
-                >
-                  {getNextSaturdays(4).map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </BuatSesiForm>
-          </CardContent>
-        </Card>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-amber-700 flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4" />
+              Menu Pengurus
+            </h2>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <ManualJimpitanForm role={profile?.role ?? ''} />
+            
+            <Card className="overflow-hidden border-0 shadow-md ring-1 ring-amber-200 bg-gradient-to-br from-amber-50 to-orange-50">
+              <CardContent className="p-5">
+                <div className="flex items-start gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
+                    <Clock className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-bold text-amber-900">
+                      Buat Sesi (Uji Coba)
+                    </p>
+                    <p className="text-xs text-amber-700 mt-1 leading-relaxed">
+                      Membuat sesi kosong untuk pengujian alur. Sesi langsung di-APPROVE.
+                    </p>
+                  </div>
+                </div>
+                <BuatSesiForm roleLabel={roleLabelMap[profile?.role ?? ''] ?? 'Pengurus'} />
+              </CardContent>
+            </Card>
+          </div>
+        </div>
       )}
 
       {/* Info warga untuk daftar */}
@@ -212,7 +205,7 @@ export default function JimpitanListPage({
                 APPROVED: { color: 'bg-emerald-100 text-emerald-700', label: 'Disetujui' },
                 REJECTED: { color: 'bg-rose-100 text-rose-700', label: 'Ditolak' },
                 CANCELLED: { color: 'bg-rose-100 text-rose-700', label: 'Dibatalkan' },
-              }[(s.status as 'DRAFT' | 'AKTIF' | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED')] || { color: 'bg-slate-100 text-slate-700', label: s.status }
+              }[(s.status as 'DRAFT' | 'AKTIF' | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED')] || { color: 'bg-slate-100 text-slate.700', label: s.status }
 
               const details = ((s as unknown) as { jimpitan_detail?: Array<{ is_bayar: boolean; nominal: number }> }).jimpitan_detail ?? []
               const totalFromSummary = Number(s.total_pendapatan ?? s.total_nominal ?? 0)

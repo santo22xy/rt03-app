@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { ArrowLeft, Receipt, CheckCircle2, Clock, AlertCircle, ChevronRight, Sparkles, TrendingUp } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { createAdminClient } from '@/lib/supabase/server'
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { formatTanggal, formatRupiah, getMonthName } from '@/lib/format'
 
 export const dynamic = 'force-dynamic'
@@ -26,6 +26,7 @@ type Pembayaran = {
   bukti_ref: string | null
   catatan: string | null
   created_at: string
+  nota_url: string | null
 }
 
 const STATUS_META = {
@@ -36,12 +37,36 @@ const STATUS_META = {
 }
 
 export default async function IuranDetailPage() {
+  const admin = createAdminClient()
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get('warga_session')?.value
-  if (!sessionToken) redirect('/login')
+  
+  let profileId: string | null = null
+  
+  if (sessionToken) {
+    // Warga login normal
+    const { data: pid } = await admin.rpc('get_warga_from_session', {
+      p_token: sessionToken,
+    })
+    if (pid) {
+      profileId = pid
+    }
+  } else {
+    // Dual-role: pengurus yang mengakses /warga
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await admin
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .single()
+      if (profile) {
+        profileId = profile.id
+      }
+    }
+  }
 
-  const admin = createAdminClient()
-  const { data: profileId } = await admin.rpc('get_warga_from_session', { p_token: sessionToken })
   if (!profileId) redirect('/login')
 
   // Ambil profile singkat
@@ -77,7 +102,7 @@ export default async function IuranDetailPage() {
   // Catatan: untuk filter per periode, dilakukan in-memory setelah join dengan sesi.
   const { data: kasList } = await admin
     .from('kas_transaksi')
-    .select('id, tanggal, kategori, uraian, nominal, metode_bayar, catatan, created_at, login_id')
+    .select('id, tanggal, kategori, uraian, nominal, metode_bayar, catatan, created_at, login_id, nota_url')
     .eq('tipe', 'MASUK')
     .eq('kategori', 'IURAN_BULANAN')
     .eq('login_id', profile.login_id)
@@ -127,6 +152,7 @@ export default async function IuranDetailPage() {
       // Catatan = uraian (mis. "Cicilan iuran Juni")
       catatan: k.uraian || k.catatan || (Number(k.nominal) > 0 ? 'Cicilan iuran' : ''),
       created_at: k.created_at,
+      nota_url: k.nota_url || null,
     })
   }
 

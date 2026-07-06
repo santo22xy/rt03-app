@@ -44,6 +44,7 @@ export function TambahTransaksiKas() {
   const [sumberDana, setSumberDana] = useState<'KAS_RT' | 'DITALANGI'>('KAS_RT')
   const [ditalangiOleh, setDitalangiOleh] = useState('')
   const [catatan, setCatatan] = useState('')
+  const [notaFile, setNotaFile] = useState<File | null>(null)
 
   // Daftar kategori aktif dari DB
   const [kategoriList, setKategoriList] = useState<KasKategori[]>([])
@@ -83,6 +84,7 @@ export function TambahTransaksiKas() {
     setSelectedDanaKhusus('')
     setSelectedBlok('')
     setSelectedProfile('')
+    setNotaFile(null)
   }
 
   function handleTipeChange(next: Tipe) {
@@ -156,6 +158,7 @@ export function TambahTransaksiKas() {
       }
     }
     if (catatan.trim()) fd.append('catatan', catatan.trim())
+    if (notaFile) fd.append('nota', notaFile)
 
     // For MERTI DUSUN
     if (selectedKategoriObj?.label.toLowerCase().includes('merti')) {
@@ -509,6 +512,25 @@ export function TambahTransaksiKas() {
               rows={2}
               disabled={isPending}
             />
+          </div>
+
+          {/* Nota / Bukti */}
+          <div>
+            <label htmlFor="nota" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">
+              Nota / Bukti <span className="text-muted-foreground/60 font-normal">(opsional)</span>
+            </label>
+            <Input
+              id="nota"
+              type="file"
+              accept=".jpg,.jpeg,.png,.webp,.gif,.pdf"
+              onChange={(e) => setNotaFile(e.target.files?.[0] || null)}
+              disabled={isPending}
+            />
+            {notaFile && (
+              <p className="text-[11px] text-emerald-700 mt-1">
+                File dipilih: {notaFile.name} ({(notaFile.size / 1024 / 1024).toFixed(2)} MB)
+              </p>
+            )}
           </div>
 
           <DialogFooter className="gap-2">
