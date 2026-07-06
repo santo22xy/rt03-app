@@ -4,7 +4,9 @@ import { useState, useEffect } from 'react'
 import { 
   Calendar, 
   Search, 
-  Loader2 
+  Loader2,
+  ArrowUpCircle,
+  ArrowDownCircle
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -37,12 +39,13 @@ interface ManualJimpitanFormProps {
 
 export function ManualJimpitanForm({ role }: ManualJimpitanFormProps) {
   const [isOpen, setIsOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
   const [residents, setResidents] = useState<Resident[]>([])
   const [residentsLoading, setResidentsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [blokFilter, setBlokFilter] = useState('')
   const [nomorRumahFilter, setNomorRumahFilter] = useState('')
+  const [sortField, setSortField] = useState<'nama' | 'blok' | 'nomor_rumah'>('blok')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0])
   const [data, setData] = useState<Record<string, { nominal: number; isBayar: boolean }>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -51,10 +54,18 @@ export function ManualJimpitanForm({ role }: ManualJimpitanFormProps) {
     async function fetchResidents() {
       try {
         const res = await getActiveResidents()
-        setResidents(res)
+        // Default sort: Blok (Asc) -> Nomor Rumah (Asc)
+        const sorted = [...res].sort((a, b) => {
+          const blokComp = a.blok.localeCompare(b.blok)
+          if (blokComp !== 0) return blokComp
+          const numA = parseInt(a.nomor_rumah, 10) || 0
+          const numB = parseInt(b.nomor_rumah, 10) || 0
+          return numA - numB
+        })
+        setResidents(sorted)
         // Initialize data with 0 nominal and false isBayar
         const initialData: Record<string, { nominal: number; isBayar: boolean }> = {}
-        res.forEach((r) => {
+        sorted.forEach((r) => {
           initialData[r.id] = { nominal: 0, isBayar: false }
         })
         setData(initialData)
@@ -133,14 +144,28 @@ export function ManualJimpitanForm({ role }: ManualJimpitanFormProps) {
   // Get unique blok values for filter
   const uniqueBlok = Array.from(new Set(residents.map(r => r.blok))).sort()
   
-  const filteredResidents = residents.filter(r => {
-    const matchesSearch = 
-      r.nama_kk.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.login_id.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesBlok = !blokFilter || r.blok === blokFilter
-    const matchesNomorRumah = !nomorRumahFilter || r.nomor_rumah.toLowerCase().includes(nomorRumahFilter.toLowerCase())
-    return matchesSearch && matchesBlok && matchesNomorRumah
-  })
+  const filteredAndSortedResidents = residents
+    .filter(r => {
+      const matchesSearch = 
+        r.nama_kk.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        r.login_id.toLowerCase().includes(searchQuery.toLowerCase())
+      const matchesBlok = !blokFilter || r.blok === blokFilter
+      const matchesNomorRumah = !nomorRumahFilter || r.nomor_rumah.toLowerCase().includes(nomorRumahFilter.toLowerCase())
+      return matchesSearch && matchesBlok && matchesNomorRumah
+    })
+    .sort((a, b) => {
+      let comparison = 0
+      if (sortField === 'nama') {
+        comparison = a.nama_kk.localeCompare(b.nama_kk)
+      } else if (sortField === 'blok') {
+        comparison = a.blok.localeCompare(b.blok)
+      } else if (sortField === 'nomor_rumah') {
+        const numA = parseInt(a.nomor_rumah, 10) || 0
+        const numB = parseInt(b.nomor_rumah, 10) || 0
+        comparison = numA - numB
+      }
+      return sortOrder === 'asc' ? comparison : -comparison
+    })
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
@@ -207,6 +232,36 @@ export function ManualJimpitanForm({ role }: ManualJimpitanFormProps) {
             </div>
           </div>
 
+          {/* Sorting Controls */}
+          <div className="flex items-center gap-4 p-2 bg-slate-50 rounded-lg border border-slate-200">
+            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <span className="whitespace-nowrap">Urutkan berdasarkan:</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                className="text-xs bg-white border border-input rounded-md px-2 py-1 outline-none focus:ring-2 focus:ring-ring/50"
+                value={sortField}
+                onChange={(e) => setSortField(e.target.value as any)}
+              >
+                <option value="nama">Nama</option>
+                <option value="blok">Blok</option>
+                <option value="nomor_rumah">Nomor Rumah</option>
+              </select>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+              >
+                {sortOrder === 'asc' ? (
+                  <ArrowUpCircle className="w-4 h-4 text-emerald-600" />
+                ) : (
+                  <ArrowDownCircle className="w-4 h-4 text-rose-600" />
+                )}
+              </Button>
+            </div>
+          </div>
+
           <div className="rounded-md border">
             <div className="max-h-[400px] overflow-y-auto">
               <table className="w-full text-sm text-left">
@@ -224,14 +279,14 @@ export function ManualJimpitanForm({ role }: ManualJimpitanFormProps) {
                         <Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" />
                       </td>
                     </tr>
-                  ) : filteredResidents.length === 0 ? (
+                  ) : filteredAndSortedResidents.length === 0 ? (
                     <tr>
                       <td colSpan={3} className="px-4 py-8 text-center text-muted-foreground">
                         Warga tidak ditemukan
                       </td>
                     </tr>
                   ) : (
-                    filteredResidents.map((r) => (
+                    filteredAndSortedResidents.map((r) => (
                       <tr key={r.id} className={`border-t ${data[r.id]?.isBayar ? 'bg-emerald-50/50' : ''}`}>
                         <td className="px-4 py-2 text-center">
                           <Checkbox 

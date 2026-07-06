@@ -22,6 +22,7 @@ import {
 } from './jimpitan-actions'
 import { getActiveDanaKhususAndProfiles } from './dana-khusus/dana-khusus-actions'
 import { KelolaKategoriDialog } from './kelola-kategori-dialog'
+import imageCompression from 'browser-image-compression'
 
 type Tipe = 'MASUK' | 'KELUAR'
 
@@ -35,6 +36,7 @@ export function TambahTransaksiKas() {
   const [open, setOpen] = useState(false)
   const [kelolaOpen, setKelolaOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
+  const [isCompressing, setIsCompressing] = useState(false)
   const [tipe, setTipe] = useState<Tipe>('MASUK')
   const [tanggal, setTanggal] = useState<string>(todayISO())
   const [kategori, setKategori] = useState<string>('')
@@ -67,6 +69,51 @@ export function TambahTransaksiKas() {
     const { danaKhususList, profilesList } = await getActiveDanaKhususAndProfiles()
     setDanaKhususList(danaKhususList || [])
     setProfilesList(profilesList || [])
+  }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) {
+      setNotaFile(null)
+      return
+    }
+
+    // 1. Validasi Ukuran File (Max 500KB)
+    const MAX_SIZE_MB = 0.5
+    if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+      toast.error(`File terlalu besar. Maksimal ${MAX_SIZE_MB * 1024} KB.`)
+      e.target.value = ''
+      setNotaFile(null)
+      return
+    }
+
+    // 2. Kompresi jika file adalah gambar
+    if (file.type.startsWith('image/')) {
+      setIsCompressing(true)
+      try {
+        const options = {
+          maxSizeMB: MAX_SIZE_MB,
+          maxWidthOrHeight: 1920,
+          useWebWorker: true,
+        }
+        const compressedFile = await imageCompression(file, options)
+        
+        if (compressedFile.size > MAX_SIZE_MB * 1024 * 1024) {
+          throw new Error('Gagal mengompres gambar ke ukuran target.')
+        }
+
+        setNotaFile(compressedFile)
+      } catch (error) {
+        console.error('Compression error:', error)
+        toast.error('Gagal memproses gambar. Pastikan format didukung atau coba file lain.')
+        setNotaFile(null)
+        e.target.value = ''
+      } finally {
+        setIsCompressing(false)
+      }
+    } else {
+      setNotaFile(file)
+    }
   }
 
   function reset() {
@@ -519,13 +566,22 @@ export function TambahTransaksiKas() {
             <label htmlFor="nota" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 block">
               Nota / Bukti <span className="text-muted-foreground/60 font-normal">(opsional)</span>
             </label>
-            <Input
-              id="nota"
-              type="file"
-              accept=".jpg,.jpeg,.png,.webp,.gif,.pdf"
-              onChange={(e) => setNotaFile(e.target.files?.[0] || null)}
-              disabled={isPending}
-            />
+            <div className="relative">
+              <Input
+                id="nota"
+                type="file"
+                accept="image/*,application/pdf"
+                capture="environment"
+                onChange={handleFileChange}
+                disabled={isPending || isCompressing}
+                className="pr-10"
+              />
+              {isCompressing && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                </div>
+              )}
+            </div>
             {notaFile && (
               <p className="text-[11px] text-emerald-700 mt-1">
                 File dipilih: {notaFile.name} ({(notaFile.size / 1024 / 1024).toFixed(2)} MB)
