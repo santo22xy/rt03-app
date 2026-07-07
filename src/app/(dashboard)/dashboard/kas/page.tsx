@@ -7,6 +7,7 @@ import {
 import { formatRupiah, formatTanggal } from '@/lib/format'
 import nextDynamic from 'next/dynamic'
 import { FilterKas } from './filter-kas'
+import { MonthPickerKas } from './month-picker-kas'
 import { KasDateGroup, type KasTransaksiItem } from './kas-date-group'
 import { ExportLaporanButton } from '../export-laporan-button'
 import { ExportLaporanPDFButton } from '../export-laporan-pdf-button'
@@ -40,7 +41,7 @@ type KasTransaksi = {
 export default async function KasPage({
   searchParams,
 }: {
-  searchParams: Promise<{ filter?: string }>
+  searchParams: Promise<{ filter?: string; month?: string }>
 }) {
   const params = await searchParams
   const filter = (params.filter ?? 'semua').toLowerCase()
@@ -49,28 +50,46 @@ export default async function KasPage({
   // (lihat SQL 40-fix-profiles-rls-no-recursion.sql untuk root cause)
   const supabase = createAdminClient()
 
-  // Ambil semua transaksi (max 100 terakhir) - filter di server untuk hemat data
-  let query = supabase
+  // Ambil semua transaksi (untuk month options)
+  const { data: allTrxRaw } = await supabase
     .from('kas_transaksi')
     .select('id, tanggal, tipe, kategori, uraian, nominal, login_id, metode_bayar, sumber_dana, ditalangi_oleh, status_talangan, catatan, created_by, created_at, nota_url')
     .order('tanggal', { ascending: false })
     .order('created_at', { ascending: false })
     .limit(200)
 
-  if (filter === 'masuk') query = query.eq('tipe', 'MASUK')
-  if (filter === 'keluar') query = query.eq('tipe', 'KELUAR')
+  // Generate list of available months (YYYY-MM)
+  const availableMonthsSet = new Set<string>()
+  const allTrx = (allTrxRaw ?? []) as KasTransaksi[]
+  allTrx.forEach(t => {
+    const monthKey = t.tanggal.slice(0, 7)
+    availableMonthsSet.add(monthKey)
+  })
+  const availableMonths = Array.from(availableMonthsSet).sort() // ascending
+  if (availableMonths.length === 0) {
+    const now = new Date()
+    availableMonths.push(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
+  }
+  // Determine current month from params or default to latest available
+  let currentMonth = params.month
+  if (!currentMonth || !availableMonthsSet.has(currentMonth)) {
+    currentMonth = availableMonths[availableMonths.length - 1]
+  }
 
-  const { data: trx } = await query
+  // Filter transactions by month and type
+  let trxList = allTrx.filter(t => t.tanggal.startsWith(currentMonth))
+  if (filter === 'masuk') trxList = trxList.filter(t => t.tipe === 'MASUK')
+  if (filter === 'keluar') trxList = trxList.filter(t => t.tipe === 'KELUAR')
 
   // Saldo dihitung independent dari filter (full ledger)
-  const { data: allTrx } = await supabase
+  const { data: allTrxForSaldo } = await supabase
     .from('kas_transaksi')
     .select('tipe, nominal')
 
-  const totalMasuk = (allTrx ?? [])
+  const totalMasuk = (allTrxForSaldo ?? [])
     .filter((t) => t.tipe === 'MASUK')
     .reduce((s, t) => s + Number(t.nominal), 0)
-  const totalKeluar = (allTrx ?? [])
+  const totalKeluar = (allTrxForSaldo ?? [])
     .filter((t) => t.tipe === 'KELUAR')
     .reduce((s, t) => s + Number(t.nominal), 0)
   const saldo = totalMasuk - totalKeluar
@@ -82,8 +101,6 @@ export default async function KasPage({
     .eq('status', 'SUBMITTED')
     .order('tanggal', { ascending: false })
     .limit(5)
-
-  const trxList = (trx ?? []) as KasTransaksi[]
 
   // Ambil master kategori untuk label dinamis (termasuk yg non-aktif
   // supaya transaksi lama dengan kategori legacy tetap punya label rapi)
@@ -188,7 +205,7 @@ export default async function KasPage({
       )}
 
       {/* Filter + List Header */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-bold">Buku Transaksi</h2>
           <p className="text-[11px] text-muted-foreground mt-0.5">
@@ -197,7 +214,10 @@ export default async function KasPage({
             {filter === 'keluar' && ' (Pengeluaran)'}
           </p>
         </div>
-        <FilterKas current={filter} />
+        <div className="flex flex-wrap gap-2">
+          <MonthPickerKas availableMonths={availableMonths} currentMonth={currentMonth} />
+          <FilterKas current={filter} />
+        </div>
       </div>
 
       {/* Transaction List */}
