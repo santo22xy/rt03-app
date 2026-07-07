@@ -2127,6 +2127,88 @@ export async function setKelebihanTujuan(formData: FormData): Promise<{
   return { success: true }
 }
 
+// =====================================================
+// RONDA ATTENDANCE: Submit absensi ronda untuk sesi tertentu
+// =====================================================
+export async function submitRondaAttendance(
+  sesiId: string,
+  attendanceData: Array<{
+    profileId: string
+    isPresent: boolean
+    isPengganti: boolean
+    penggantiDariId: string | null
+    catatan: string | null
+  }>
+): Promise<{ success?: boolean; error?: string }> {
+  const profile = await getCurrentUser()
+  if (!profile) return { error: 'Tidak terautentikasi' }
+  if (!['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'SUPERADMIN'].includes(profile.role)) {
+    return { error: 'Hanya pengurus yang boleh menginput absensi ronda' }
+  }
+
+  const admin = createAdminClient()
+
+  // 1. Validasi sesi ada
+  const { data: sesi } = await admin
+    .from('jimpitan_sesi')
+    .select('id, tanggal')
+    .eq('id', sesiId)
+    .maybeSingle()
+
+  if (!sesi) return { error: 'Sesi tidak ditemukan' }
+
+  try {
+    // 2. Ambil data profil untuk snapshot
+    const profileIds = attendanceData.map(d => d.profileId)
+    const { data: profiles } = await admin
+      .from('profiles')
+      .select('id, nama_kk, login_id')
+      .in('id', profileIds)
+    
+    if (!profiles) return { error: 'Gagal mengambil data profil' }
+
+    // 3. Bersihkan absensi lama untuk sesi ini (jika ada)
+    const { error: clearErr } = await admin
+      .from('ronda_attendance')
+      .delete()
+      .eq('sesi_id', sesiId)
+
+    if (clearErr) return { error: `Gagal membersihkan data lama: ${clearErr.message}` }
+
+    // 4. Insert data baru
+    const attendanceRows = attendanceData.map(d => {
+      const p = profiles.find(prof => prof.id === d.profileId)
+      if (!p) return null
+      return {
+        sesi_id: sesiId,
+        profile_id: p.id,
+        login_id: p.login_id,
+        nama_snapshot: p.nama_kk,
+        hadir: d.isPresent,
+        is_pengganti: d.isPengganti,
+        pengganti_dari_id: d.penggantiDariId,
+        pengganti_dari_nama: d.isPengganti ? p.nama_kk : null,
+        catatan: d.catatan || null,
+      }
+    }).filter(Boolean)
+
+    const { error: insertErr } = await admin
+      .from('ronda_attendance')
+      .insert(attendanceRows)
+
+    if (insertErr) return { error: insertErr.message }
+
+    revalidatePath('/dashboard/ronda')
+    revalidatePath('/warga/ronda')
+    revalidatePath(`/dashboard/jimpitan/${sesiId}`)
+    revalidatePath(`/warga/jimpitan/${sesiId}`)
+
+    return { success: true }
+  } catch (e) {
+    return { error: (e as Error).message }
+  }
+}
+
 export async function pindahkanKelebihanKeBulanDepan(tagihanId: string): Promise<{
   success?: boolean
   error?: string

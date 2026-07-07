@@ -33,17 +33,12 @@ export async function createDanaKhusus(formData: FormData): Promise<{
   const deskripsi = ((formData.get('deskripsi') as string) ?? '').trim()
   const kategori = (formData.get('kategori') as string)?.trim() || 'LAINNYA'
   const targetPerKk = Number(formData.get('target_per_kk'))
-  const targetPerKkKhususRaw = formData.get('target_per_kk_khusus') as string | null
-  const targetPerKkKhusus = targetPerKkKhususRaw && targetPerKkKhususRaw.trim() !== ''
-    ? Number(targetPerKkKhususRaw)
-    : targetPerKk  // default sama dengan normal
   const tanggalMulai = formData.get('tanggal_mulai') as string
   const tanggalSelesai = formData.get('tanggal_selesai') as string
   const isWajib = formData.get('is_wajib') === 'on' || formData.get('is_wajib') === 'true'
 
   if (!judul) return { error: 'Judul wajib diisi' }
   if (!targetPerKk || targetPerKk <= 0) return { error: 'Target per KK harus > 0' }
-  if (targetPerKkKhusus < 0) return { error: 'Target KK Khusus tidak boleh negatif' }
   if (!tanggalMulai || !tanggalSelesai) return { error: 'Tanggal mulai & selesai wajib diisi' }
   if (new Date(tanggalSelesai) < new Date(tanggalMulai)) {
     return { error: 'Tanggal selesai tidak boleh sebelum tanggal mulai' }
@@ -56,7 +51,6 @@ export async function createDanaKhusus(formData: FormData): Promise<{
       deskripsi: deskripsi || null,
       kategori,
       target_per_kk: targetPerKk,
-      target_per_kk_khusus: targetPerKkKhusus,
       tanggal_mulai: tanggalMulai,
       tanggal_selesai: tanggalSelesai,
       is_active: true,
@@ -150,133 +144,6 @@ export async function bayarDanaKhusus(formData: FormData): Promise<{
 }
 
 /**
- * Update dana_khusus (judul, deskripsi, kategori, target_per_kk, tanggal, is_wajib, is_active)
- * FIX: pengurus bisa bebas melakukan pengaturan ke rincian dana khusus (termasuk nominal Iuran)
- */
-export async function updateDanaKhusus(formData: FormData): Promise<{
-  success?: boolean
-  error?: string
-}> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Tidak terautentikasi' }
-
-  const admin = createAdminClient()
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('id, role')
-    .eq('id', user.id)
-    .single()
-
-  if (!profile || !['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'SUPERADMIN'].includes(profile.role)) {
-    return { error: 'Hanya pengurus yang boleh mengubah dana khusus' }
-  }
-
-  const id = formData.get('id') as string
-  if (!id) return { error: 'ID dana khusus tidak ditemukan' }
-
-  // Ambil data existing untuk validasi & rollback kalau ada tagihan sudah ada
-  const { data: existing, error: existingErr } = await admin
-    .from('dana_khusus')
-    .select('*')
-    .eq('id', id)
-    .single()
-
-  if (existingErr || !existing) return { error: 'Dana khusus tidak ditemukan' }
-
-  // Hitung tagihan existing
-  const { count: tagihanCount } = await admin
-    .from('dana_khusus_tagihan')
-    .select('id', { count: 'exact', head: true })
-    .eq('dana_khusus_id', id)
-
-  const judul = (formData.get('judul') as string)?.trim()
-  const deskripsi = ((formData.get('deskripsi') as string) ?? '').trim()
-  const kategori = (formData.get('kategori') as string)?.trim() || existing.kategori
-  const targetPerKk = Number(formData.get('target_per_kk'))
-  const targetPerKkKhususRaw = formData.get('target_per_kk_khusus') as string | null
-  const targetPerKkKhusus = targetPerKkKhususRaw && targetPerKkKhususRaw.trim() !== ''
-    ? Number(targetPerKkKhususRaw)
-    : targetPerKk  // default sama dengan normal
-  const tanggalMulai = formData.get('tanggal_mulai') as string
-  const tanggalSelesai = formData.get('tanggal_selesai') as string
-  const isWajibRaw = formData.get('is_wajib')
-  const isWajib = isWajibRaw === 'on' || isWajibRaw === 'true'
-  const isActiveRaw = formData.get('is_active')
-  const isActive = isActiveRaw === 'on' || isActiveRaw === 'true'
-
-  if (!judul) return { error: 'Judul wajib diisi' }
-  if (!targetPerKk || targetPerKk <= 0) return { error: 'Target per KK harus > 0' }
-  if (targetPerKkKhusus < 0) return { error: 'Target KK Khusus tidak boleh negatif' }
-  if (!tanggalMulai || !tanggalSelesai) return { error: 'Tanggal mulai & selesai wajib diisi' }
-  if (new Date(tanggalSelesai) < new Date(tanggalMulai)) {
-    return { error: 'Tanggal selesai tidak boleh sebelum tanggal mulai' }
-  }
-
-  const oldTarget = Number(existing.target_per_kk)
-  const oldTargetKhusus = Number(existing.target_per_kk_khusus ?? oldTarget)
-
-  // Propagate perubahan nominal ke tagihan yang belum dibayar.
-  // Logic:
-  //   - Untuk profile NORMAL: nominal_tagihan di-update ke target_per_kk baru
-  //     HANYA kalau nominal lama = oldTarget (artinya masih nominal awal).
-  //   - Untuk profile KHUSUS: nominal_tagihan di-update ke target_per_kk_khusus baru
-  //     HANYA kalau nominal lama = oldTargetKhusus.
-  //   - Tagihan yang sudah bayar sebagian / lunas TIDAK diubah.
-  if (targetPerKk !== oldTarget) {
-    // Update NORMAL rows
-    const { error: propErr } = await admin
-      .from('dana_khusus_tagihan')
-      .update({ nominal_tagihan: targetPerKk })
-      .eq('dana_khusus_id', id)
-      .eq('nominal_tagihan', oldTarget)
-      .eq('total_terbayar', 0)
-    if (propErr) console.warn('Gagal propagate target_per_kk (NORMAL):', propErr.message)
-  }
-
-  if (targetPerKkKhusus !== oldTargetKhusus) {
-    // Update KHUSUS rows — perlu join dengan profiles untuk filter kategori_tarif
-    // Karena Supabase JS tidak support langsung JOIN di UPDATE, kita pakai RPC-style:
-    // Update semua row KHUSUS yang nominalnya masih sama dengan oldTargetKhusus
-    // (asumsi: kalau user sebelumnya set khusus sama dengan normal, semua rows di oldTarget = oldTargetKhusus)
-    const { error: propErr } = await admin
-      .rpc('update_khusus_tagihan_nominal', {
-        p_dana_khusus_id: id,
-        p_old_nominal: oldTargetKhusus,
-        p_new_nominal: targetPerKkKhusus,
-      })
-    if (propErr) {
-      // Fallback: kalau RPC belum ada, coba approach langsung via raw SQL via admin
-      console.warn('Gagal propagate target_per_kk_khusus via RPC, skip:', propErr.message)
-    }
-  }
-
-  const { error } = await admin
-    .from('dana_khusus')
-    .update({
-      judul,
-      deskripsi: deskripsi || null,
-      kategori,
-      target_per_kk: targetPerKk,
-      target_per_kk_khusus: targetPerKkKhusus,
-      tanggal_mulai: tanggalMulai,
-      tanggal_selesai: tanggalSelesai,
-      is_wajib: isWajib,
-      is_active: isActive,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', id)
-
-  if (error) return { error: `Gagal update dana khusus: ${error.message}` }
-
-  revalidatePath(`/dashboard/dana-khusus/${id}`)
-  revalidatePath('/dashboard/dana-khusus')
-  revalidatePath('/warga/dana-khusus')
-
-  return { success: true }
-}
-
-/**
  * Tutup/nonaktifkan dana khusus (hentikan pengumpulan)
  */
 export async function toggleDanaKhususActive(formData: FormData): Promise<{
@@ -294,7 +161,7 @@ export async function toggleDanaKhususActive(formData: FormData): Promise<{
     .eq('id', user.id)
     .single()
 
-  if (!profile || !['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'SUPERADMIN'].includes(profile.role)) {
+  if (!profile || !['KETUA_RT', 'BENDAHARA', 'SUPERADMIN'].includes(profile.role)) {
     return { error: 'Hanya pengurus yang boleh toggle dana khusus' }
   }
 
@@ -316,7 +183,6 @@ export async function toggleDanaKhususActive(formData: FormData): Promise<{
 
 /**
  * Get daftar dana khusus dengan progress summary
- * Optimized to avoid N+1 RPC calls
  */
 export async function getDanaKhususList(): Promise<{
   data?: Array<{
@@ -325,7 +191,6 @@ export async function getDanaKhususList(): Promise<{
     deskripsi: string | null
     kategori: string
     target_per_kk: number
-    target_per_kk_khusus: number | null
     tanggal_mulai: string
     tanggal_selesai: string
     is_active: boolean
@@ -343,158 +208,43 @@ export async function getDanaKhususList(): Promise<{
   const admin = createAdminClient()
   const { data: danaList, error } = await admin
     .from('dana_khusus')
-    .select(`
-      *,
-      tagihan:dana_khusus_tagihan(
-        nominal_tagihan,
-        total_terbayar,
-        status
-      )
-    `)
+    .select('*')
     .order('is_active', { ascending: false })
     .order('created_at', { ascending: false })
 
   if (error) return { error: error.message }
 
-  const enriched = (danaList ?? []).map((d: any) => {
-    const tagihan = d.tagihan || []
-    const total_tagihan = tagihan.reduce((acc: number, t: any) => acc + Number(t.nominal_tagihan), 0)
-    const total_terbayar = tagihan.reduce((acc: number, t: any) => acc + Number(t.total_terbayar), 0)
-    const jumlah_lunas = tagihan.filter((t: any) => t.status === 'LUNAS').length
-    const jumlah_cicil = tagihan.filter((t: any) => t.status === 'CICIL').length
-    const jumlah_belum = tagihan.filter((t: any) => t.status === 'BELUM').length
-    const pct_progres = total_tagihan > 0 ? (total_terbayar / total_tagihan) * 100 : 0
+  // Compute progress per dana khusus
+  type Progress = {
+    total_tagihan?: number | string | null
+    total_terbayar?: number | string | null
+    jumlah_lunas?: number | string | null
+    jumlah_cicil?: number | string | null
+    jumlah_belum?: number | string | null
+    pct_progres?: number | string | null
+  }
+  const enriched = await Promise.all(
+    (danaList ?? []).map(async (d) => {
+      const { data: progress } = await admin
+        .rpc('get_dana_khusus_progress', { p_dana_khusus_id: d.id })
 
-    return {
-      ...d,
-      total_tagihan,
-      total_terbayar,
-      jumlah_lunas,
-      jumlah_cicil,
-      jumlah_belum,
-      pct_progres: Math.round(pct_progres * 10) / 10
-    }
-  })
+      // RPC return type bisa array of rows — ambil row pertama
+      const p: Progress | undefined = Array.isArray(progress)
+        ? (progress[0] as Progress | undefined)
+        : (progress as Progress | undefined)
+
+      return {
+        ...d,
+        total_tagihan: Number(p?.total_tagihan ?? 0),
+        total_terbayar: Number(p?.total_terbayar ?? 0),
+        jumlah_lunas: Number(p?.jumlah_lunas ?? 0),
+        jumlah_cicil: Number(p?.jumlah_cicil ?? 0),
+        jumlah_belum: Number(p?.jumlah_belum ?? 0),
+        pct_progres: Number(p?.pct_progres ?? 0),
+      }
+    })
+  )
 
   return { data: enriched }
 }
-
-/**
- * Edit dana_khusus_pembayaran (update nominal, tanggal, catatan, metode)
- */
-export async function editDanaKhususPembayaran(formData: FormData): Promise<{
-  success?: boolean
-  error?: string
-}> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Tidak terautentikasi' }
-
-  const admin = createAdminClient()
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('id, role')
-    .eq('id', user.id)
-    .single()
-
-  if (!profile || !['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'SUPERADMIN'].includes(profile.role)) {
-    return { error: 'Hanya pengurus yang boleh mengedit pembayaran dana khusus' }
-  }
-
-  const pembayaranId = formData.get('pembayaran_id') as string
-  const nominal = Number(formData.get('nominal'))
-  const metode = formData.get('metode') as string
-  const tanggalBayar = formData.get('tanggal_bayar') as string
-  const catatan = (formData.get('catatan') as string)?.trim()
-
-  if (!pembayaranId) return { error: 'ID pembayaran tidak ditemukan' }
-  if (!nominal || nominal <= 0) return { error: 'Nominal harus > 0' }
-
-  const { error } = await admin
-    .from('dana_khusus_pembayaran')
-    .update({
-      nominal,
-      metode: metode || 'TUNAI',
-      tanggal_bayar: tanggalBayar,
-      catatan: catatan || null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', pembayaranId)
-
-  if (error) return { error: `Gagal edit pembayaran: ${error.message}` }
-
-  revalidatePath('/dashboard/dana-khusus')
-  revalidatePath('/warga/dana-khusus')
-
-  return { success: true }
-}
-
-/**
- * Hapus dana_khusus_pembayaran (dan auto-update tagihan & kas_transaksi)
- */
-export async function deleteDanaKhususPembayaran(formData: FormData): Promise<{
-  success?: boolean
-  error?: string
-}> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Tidak terautentikasi' }
-
-  const admin = createAdminClient()
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('id, role')
-    .eq('id', user.id)
-    .single()
-
-  if (!profile || !['KETUA_RT', 'BENDAHARA', 'SEKRETARIS', 'SUPERADMIN'].includes(profile.role)) {
-    return { error: 'Hanya pengurus yang boleh menghapus pembayaran dana khusus' }
-  }
-
-  const pembayaranId = formData.get('pembayaran_id') as string
-
-  if (!pembayaranId) return { error: 'ID pembayaran tidak ditemukan' }
-
-  const { error } = await admin
-    .from('dana_khusus_pembayaran')
-    .delete()
-    .eq('id', pembayaranId)
-
-  if (error) return { error: `Gagal hapus pembayaran: ${error.message}` }
-
-  revalidatePath('/dashboard/dana-khusus')
-  revalidatePath('/warga/dana-khusus')
-
-  return { success: true }
-}
-
-export async function getActiveDanaKhususAndProfiles() {
-  const admin = createAdminClient()
-  const [danaRes, profileRes] = await Promise.all([
-    getDanaKhususList(),
-    admin.from('profiles')
-      .select('id, login_id, nama_kk, blok, nomor_rumah')
-      .order('blok', { ascending: true })
-      .order('nomor_rumah', { ascending: true })
-  ])
-
-  const activeDanaKhusus = (danaRes?.data || []).filter(d => d.is_active)
-
-  return {
-    danaKhususList: activeDanaKhusus,
-    profilesList: profileRes?.data || []
-  }
-}
-
-export async function debugJimpitanSessions() {
-  const admin = createAdminClient()
-  const { data, error } = await admin
-    .from('jimpitan_sesi')
-    .select('id, tanggal, status')
-    .order('tanggal', { ascending: false })
-  
-  if (error) return { error: error.message }
-  return { data }
-}
-
 
