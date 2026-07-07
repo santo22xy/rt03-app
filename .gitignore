@@ -41,3 +41,17 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# temp files
+chatgpthelper.zip
+debug_db.js
+scripts/audit_jimpitan.ts
+scripts/check_jimpitan_schema.ts
+scripts/fix_jimpitan_data.ts
+scripts/repair_jimpitan_data.ts
+scripts/repair_jimpitan_data_final.ts
+scripts/repair_jimpitan_data_v2.ts
+scripts/repair_jimpitan_data_v3.ts
+scripts/debug-kas.mjs
+scripts/debug-kas-server.mjs
+sql/repair-jimpitan-2026-06-27.sql
