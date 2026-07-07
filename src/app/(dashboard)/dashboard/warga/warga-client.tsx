@@ -466,7 +466,10 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
-                          <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="h-8 w-8" />}>
+                          <DropdownMenuTrigger
+                            aria-label="Menu aksi"
+                            className="inline-flex items-center justify-center h-8 w-8 rounded-lg hover:bg-muted focus:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                          >
                             <MoreVertical className="w-4 h-4" />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
@@ -547,9 +550,12 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                   </div>
                 </div>
                 <DropdownMenu>
-                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label="Menu aksi" />}>
-                          <MoreVertical className="w-3.5 h-3.5" />
-                        </DropdownMenuTrigger>
+                  <DropdownMenuTrigger
+                    aria-label="Menu aksi"
+                    className="inline-flex items-center justify-center h-7 w-7 rounded-lg hover:bg-muted focus:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors shrink-0"
+                  >
+                    <MoreVertical className="w-3.5 h-3.5" />
+                  </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-48">
                     <DropdownMenuItem onClick={() => setEditTarget(w)}>
                       <Pencil className="w-4 h-4" /> Edit
@@ -592,7 +598,7 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
         return (
         <Card className="border-0 shadow-md mt-10">
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle className="text-base flex items-center justify-center gap-2">
               <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
                 <Shield className="w-4 h-4 text-white" />
               </div>
@@ -602,7 +608,7 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
               Akun dengan akses dashboard pengurus. Klik ⋮ untuk reset PIN atau edit.
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pb-6">
             {/* Highlight Pak RT kalau ada */}
             {ketuaRT && (
               <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-amber-50 to-yellow-50 border-2 border-amber-300 flex items-center gap-3 shadow-sm">
@@ -631,7 +637,7 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 px-2 pt-1">
               {sortedPengurus.map((p, i) => {
                 const isKetua = p.role === 'KETUA_RT'
                 const gradients = isKetua
@@ -667,9 +673,12 @@ export function WargaClient({ warga, pengurus, kycPendingCount }: WargaClientPro
                         {p.is_active ? 'Aktif' : 'Off'}
                       </Badge>
                       <DropdownMenu>
-                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/20 hover:text-white shrink-0" />}>
-                          <MoreVertical className="w-4 h-4" />
-                        </DropdownMenuTrigger>
+                      <DropdownMenuTrigger
+                        aria-label="Menu aksi"
+                        className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-white hover:bg-white/20 focus:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 transition-colors shrink-0"
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                      </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48">
                           <DropdownMenuItem onClick={() => setEditTarget(p)}>
                             <Pencil className="w-4 h-4" /> Edit Data

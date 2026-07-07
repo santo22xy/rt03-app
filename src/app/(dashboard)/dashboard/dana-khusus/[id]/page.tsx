@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { formatRupiah } from '@/lib/format'
 import { ArrowLeft, HeartHandshake, Users, CheckCircle2, Clock, AlertCircle, Calendar, Target } from 'lucide-react'
+import { PengaturanDanaKhusus } from '../pengaturan-dana-khusus'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,11 +28,11 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
     .eq('dana_khusus_id', id)
     .order('login_id', { ascending: true })
 
-  // Jika error tagihan, tetap tampilkan halaman dengan tagihan kosong
-  if (tagihanErr) console.error('Error fetching tagihan list:', tagihanErr)
+  // Don't return 404 if tagihanErr, just use empty list
+  const tagihanListSafe = tagihanList ?? []
 
   // Ambil profil lengkap
-  const profileIds = (tagihanList ?? []).map(t => t.profile_id)
+  const profileIds = tagihanListSafe.map(t => t.profile_id)
   const { data: profiles } = await admin
     .from('profiles')
     .select('id, login_id, nama_kk, blok, nomor_rumah, no_hp')
@@ -46,7 +47,7 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
     .order('tanggal_bayar', { ascending: false })
     .order('created_at', { ascending: false })
 
-  const enrichedTagihan = (tagihanList ?? [])
+  const enrichedTagihan = tagihanListSafe
     .map(t => ({ ...t, profile: profileMap.get(t.profile_id) }))
     .sort((a, b) => {
       const ba = a.profile?.blok ?? 'Z'
@@ -65,10 +66,24 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
 
   return (
     <div className="space-y-4">
-      <Link href="/dashboard/dana-khusus" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="w-4 h-4" />
-        Kembali ke daftar dana khusus
-      </Link>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <Link href="/dashboard/dana-khusus" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="w-4 h-4" />
+          Kembali ke daftar dana khusus
+        </Link>
+        <PengaturanDanaKhusus dana={{
+          id: dana.id,
+          judul: dana.judul,
+          deskripsi: dana.deskripsi,
+          kategori: dana.kategori,
+          target_per_kk: Number(dana.target_per_kk),
+          target_per_kk_khusus: dana.target_per_kk_khusus != null ? Number(dana.target_per_kk_khusus) : null,
+          tanggal_mulai: dana.tanggal_mulai,
+          tanggal_selesai: dana.tanggal_selesai,
+          is_wajib: dana.is_wajib,
+          is_active: dana.is_active,
+        }} />
+      </div>
 
       {/* Header */}
       <Card className="border-0 shadow-md overflow-hidden">
@@ -90,11 +105,18 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
             </div>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <CardContent className="px-6 pb-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
             <div className="p-3 rounded-xl bg-blue-50 border border-blue-100">
               <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Target / KK</p>
-              <p className="text-lg font-bold text-blue-700">{formatRupiah(dana.target_per_kk)}</p>
+              {dana.target_per_kk_khusus != null && Number(dana.target_per_kk_khusus) !== Number(dana.target_per_kk) ? (
+                <>
+                  <p className="text-sm font-bold text-blue-700">{formatRupiah(dana.target_per_kk)}</p>
+                  <p className="text-[10px] text-blue-600 mt-0.5">Khusus: {formatRupiah(dana.target_per_kk_khusus)}</p>
+                </>
+              ) : (
+                <p className="text-lg font-bold text-blue-700">{formatRupiah(dana.target_per_kk)}</p>
+              )}
             </div>
             <div className="p-3 rounded-xl bg-purple-50 border border-purple-100">
               <p className="text-[10px] font-bold uppercase tracking-wider text-purple-600">Total Target</p>
@@ -110,7 +132,7 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
             </div>
           </div>
 
-          <div>
+          <div className="px-1 mb-4">
             <div className="flex items-center justify-between text-sm mb-1">
               <span className="font-semibold">{pct}% tercapai</span>
               <span className="text-muted-foreground">{enrichedTagihan.length} KK terdaftar</span>
@@ -120,30 +142,30 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-2 mt-3 text-center">
-            <div className="p-2 rounded-lg bg-emerald-50">
+          <div className="grid grid-cols-4 gap-3 mt-3 text-center px-1">
+            <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-100">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 mx-auto mb-0.5" />
               <p className="text-lg font-bold text-emerald-700">{lunasCount}</p>
               <p className="text-[10px] font-semibold text-emerald-600">Lunas</p>
             </div>
-            <div className="p-2 rounded-lg bg-amber-50">
+            <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-100">
               <Clock className="w-4 h-4 text-amber-600 mx-auto mb-0.5" />
               <p className="text-lg font-bold text-amber-700">{cicilCount}</p>
               <p className="text-[10px] font-semibold text-amber-600">Cicil</p>
             </div>
-            <div className="p-2 rounded-lg bg-rose-50">
+            <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-100">
               <AlertCircle className="w-4 h-4 text-rose-600 mx-auto mb-0.5" />
               <p className="text-lg font-bold text-rose-700">{belumCount}</p>
               <p className="text-[10px] font-semibold text-rose-600">Belum</p>
             </div>
-            <div className="p-2 rounded-lg bg-blue-50">
+            <div className="p-2.5 rounded-lg bg-blue-50 border border-blue-100">
               <Target className="w-4 h-4 text-blue-600 mx-auto mb-0.5" />
               <p className="text-lg font-bold text-blue-700">{lebihCount}</p>
               <p className="text-[10px] font-semibold text-blue-600">Lebih</p>
             </div>
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
+          <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted-foreground px-1">
             <span className="flex items-center gap-1">
               <Calendar className="w-3 h-3" />
               {new Date(dana.tanggal_mulai).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
@@ -199,6 +221,7 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
                     </p>
                   </div>
                   <p className="font-bold text-emerald-700">{formatRupiah(p.nominal)}</p>
+                  <EditPembayaranDanaKhusus p={p} />
                 </div>
               ))}
             </div>
@@ -211,6 +234,7 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
 
 // Inline form untuk input pembayaran (client component needed)
 import { BayarCicilanInline } from './bayar-cicilan-inline'
+import { EditPembayaranDanaKhusus } from './edit-pembayaran-dana-khusus'
 
 type DanaKhususTagihanRow = {
   id: string

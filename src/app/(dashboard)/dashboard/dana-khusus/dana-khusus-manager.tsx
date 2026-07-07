@@ -27,6 +27,7 @@ type DanaKhusus = {
   deskripsi: string | null
   kategori: string
   target_per_kk: number
+  target_per_kk_khusus: number | null
   tanggal_mulai: string
   tanggal_selesai: string
   is_active: boolean
@@ -72,6 +73,7 @@ export function DanaKhususManager() {
   const [deskripsi, setDeskripsi] = useState('')
   const [kategori, setKategori] = useState('LAINNYA')
   const [targetPerKk, setTargetPerKk] = useState('50000')
+  const [targetPerKkKhusus, setTargetPerKkKhusus] = useState('')  // kosong = sama dengan normal
   const [tanggalMulai, setTanggalMulai] = useState(todayISO())
   const [tanggalSelesai, setTanggalSelesai] = useState(futureDateISO(60))
   const [isWajib, setIsWajib] = useState(false)
@@ -95,6 +97,7 @@ export function DanaKhususManager() {
     fd.append('deskripsi', deskripsi)
     fd.append('kategori', kategori)
     fd.append('target_per_kk', targetPerKk)
+    fd.append('target_per_kk_khusus', targetPerKkKhusus)
     fd.append('tanggal_mulai', tanggalMulai)
     fd.append('tanggal_selesai', tanggalSelesai)
     fd.append('is_wajib', String(isWajib))
@@ -108,7 +111,8 @@ export function DanaKhususManager() {
       toast.success('Dana khusus berhasil dibuat! Tagihan per KK ter-generate otomatis.')
       setOpenCreate(false)
       setJudul(''); setDeskripsi(''); setKategori('LAINNYA')
-      setTargetPerKk('50000'); setTanggalMulai(todayISO())
+      setTargetPerKk('50000'); setTargetPerKkKhusus('')
+      setTanggalMulai(todayISO())
       setTanggalSelesai(futureDateISO(60)); setIsWajib(false)
       loadData()
     })
@@ -217,19 +221,36 @@ export function DanaKhususManager() {
                     <option value="LAINNYA">Lainnya</option>
                   </select>
                 </div>
-                <div>
-                  <Label htmlFor="target" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1 block">
-                    Target / KK *
-                  </Label>
-                  <Input
-                    id="target"
-                    type="number"
-                    min={0}
-                    value={targetPerKk}
-                    onChange={(e) => setTargetPerKk(e.target.value)}
-                    disabled={isCreating}
-                  />
-                </div>
+                <div className="space-y-2">
+              <div>
+                <Label htmlFor="target" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1 block">
+                  Iuran / KK Normal *
+                </Label>
+                <Input
+                  id="target"
+                  type="number"
+                  min={0}
+                  value={targetPerKk}
+                  onChange={(e) => setTargetPerKk(e.target.value)}
+                  disabled={isCreating}
+                />
+              </div>
+              <div>
+                <Label htmlFor="target-khusus" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1 block">
+                  Iuran / KK Khusus{' '}
+                  <span className="text-muted-foreground normal-case font-normal">(opsional, single parent / kondisi khusus)</span>
+                </Label>
+                <Input
+                  id="target-khusus"
+                  type="number"
+                  min={0}
+                  placeholder={`Kosong = sama dengan KK Normal (Rp ${Number(targetPerKk || 0).toLocaleString('id-ID')})`}
+                  value={targetPerKkKhusus}
+                  onChange={(e) => setTargetPerKkKhusus(e.target.value)}
+                  disabled={isCreating}
+                />
+              </div>
+            </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -393,7 +414,7 @@ function DanaKhususCard({ d, onToggle }: { d: DanaKhusus; onToggle: (d: DanaKhus
           <CardDescription className="line-clamp-2 text-[11px]">{d.deskripsi}</CardDescription>
         )}
       </CardHeader>
-      <CardContent className="pt-0 space-y-3">
+      <CardContent className="pt-0 px-5 pb-5 space-y-3">
         {/* Progress Bar */}
         <div>
           <div className="flex items-center justify-between text-xs mb-1">
@@ -427,7 +448,11 @@ function DanaKhususCard({ d, onToggle }: { d: DanaKhusus; onToggle: (d: DanaKhus
         <div className="text-[10px] text-muted-foreground space-y-0.5">
           <p className="flex items-center gap-1">
             <Target className="w-3 h-3" />
-            Target: <span className="font-semibold">Rp {d.target_per_kk.toLocaleString('id-ID')}</span> / KK
+            Target: <span className="font-semibold">Rp {d.target_per_kk.toLocaleString('id-ID')}</span>
+            {d.target_per_kk_khusus != null && d.target_per_kk_khusus !== d.target_per_kk && (
+              <span> · Khusus <span className="font-semibold">Rp {d.target_per_kk_khusus.toLocaleString('id-ID')}</span></span>
+            )}
+            {' '}/ KK
           </p>
           <p className="flex items-center gap-1">
             <Calendar className="w-3 h-3" />
