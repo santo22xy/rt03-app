@@ -50,34 +50,57 @@ export default async function KasPage({
   // (lihat SQL 40-fix-profiles-rls-no-recursion.sql untuk root cause)
   const supabase = createAdminClient()
 
-  // Ambil semua transaksi (untuk month options)
-  const { data: allTrxRaw } = await supabase
+  // Ambil semua transaksi (tanpa limit untuk month options)
+  // First try with nota_url, if that fails (column doesn't exist) fallback to without it
+  let { data: allTrxRaw, error: queryError } = await supabase
     .from('kas_transaksi')
     .select('id, tanggal, tipe, kategori, uraian, nominal, login_id, metode_bayar, sumber_dana, ditalangi_oleh, status_talangan, catatan, created_by, created_at, nota_url')
     .order('tanggal', { ascending: false })
     .order('created_at', { ascending: false })
-    .limit(200)
+
+  if (queryError) {
+    console.warn('kas/page.tsx - query with nota_url failed, trying without:', queryError)
+    // Fallback to query without nota_url
+    const fallbackResult = await supabase
+      .from('kas_transaksi')
+      .select('id, tanggal, tipe, kategori, uraian, nominal, login_id, metode_bayar, sumber_dana, ditalangi_oleh, status_talangan, catatan, created_by, created_at')
+      .order('tanggal', { ascending: false })
+      .order('created_at', { ascending: false })
+    allTrxRaw = fallbackResult.data
+    queryError = fallbackResult.error
+  }
+
+  if (queryError) {
+    console.error('kas/page.tsx - final query error:', queryError)
+  }
 
   // Generate list of available months (YYYY-MM)
   const availableMonthsSet = new Set<string>()
   const allTrx = (allTrxRaw ?? []) as KasTransaksi[]
+  console.log("kas/page.tsx - allTrx.length:", allTrx.length)
+  console.log("kas/page.tsx - first 10 trx.tanggal:", allTrx.slice(0, 10).map(t => t.tanggal))
   allTrx.forEach(t => {
     const monthKey = t.tanggal.slice(0, 7)
+    console.log("kas/page.tsx - adding monthKey:", monthKey)
     availableMonthsSet.add(monthKey)
   })
   const availableMonths = Array.from(availableMonthsSet).sort() // ascending
+  console.log("kas/page.tsx - availableMonths:", availableMonths)
   if (availableMonths.length === 0) {
     const now = new Date()
     availableMonths.push(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
   }
   // Determine current month from params or default to latest available
   let currentMonth = params.month
+  console.log("kas/page.tsx - params.month:", params.month)
   if (!currentMonth || !availableMonthsSet.has(currentMonth)) {
     currentMonth = availableMonths[availableMonths.length - 1]
   }
+  console.log("kas/page.tsx - currentMonth:", currentMonth)
 
   // Filter transactions by month and type
   let trxList = allTrx.filter(t => t.tanggal.startsWith(currentMonth))
+  console.log("kas/page.tsx - trxList.length:", trxList.length)
   if (filter === 'masuk') trxList = trxList.filter(t => t.tipe === 'MASUK')
   if (filter === 'keluar') trxList = trxList.filter(t => t.tipe === 'KELUAR')
 

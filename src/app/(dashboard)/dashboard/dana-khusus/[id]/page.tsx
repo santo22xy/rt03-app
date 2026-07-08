@@ -219,6 +219,16 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
                       {' · '}{p.metode}
                       {p.catatan && ` · ${p.catatan}`}
                     </p>
+                    {p.bukti_url && (
+                      <a
+                        href={p.bukti_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+                      >
+                        📎 Lihat Bukti Pembayaran
+                      </a>
+                    )}
                   </div>
                   <p className="font-bold text-emerald-700">{formatRupiah(p.nominal)}</p>
                   <EditPembayaranDanaKhusus p={p} />
