@@ -213,41 +213,26 @@ export async function updateDanaKhusus(formData: FormData): Promise<{
     return { error: 'Tanggal selesai tidak boleh sebelum tanggal mulai' }
   }
 
-  const oldTarget = Number(existing.target_per_kk)
-  const oldTargetKhusus = Number(existing.target_per_kk_khusus ?? oldTarget)
+  const newTargetNormal = Number(targetPerKk)
+  const newTargetKhusus = Number(targetPerKkKhusus)
 
-  // Propagate perubahan nominal ke tagihan yang belum dibayar.
-  // Logic:
-  //   - Untuk profile NORMAL: nominal_tagihan di-update ke target_per_kk baru
-  //     HANYA kalau nominal lama = oldTarget (artinya masih nominal awal).
-  //   - Untuk profile KHUSUS: nominal_tagihan di-update ke target_per_kk_khusus baru
-  //     HANYA kalau nominal lama = oldTargetKhusus.
-  //   - Tagihan yang sudah bayar sebagian / lunas TIDAK diubah.
-  if (targetPerKk !== oldTarget) {
-    // Update NORMAL rows
-    const { error: propErr } = await admin
-      .from('dana_khusus_tagihan')
-      .update({ nominal_tagihan: targetPerKk })
-      .eq('dana_khusus_id', id)
-      .eq('nominal_tagihan', oldTarget)
-      .eq('total_terbayar', 0)
-    if (propErr) console.warn('Gagal propagate target_per_kk (NORMAL):', propErr.message)
-  }
-
-  if (targetPerKkKhusus !== oldTargetKhusus) {
-    // Update KHUSUS rows — perlu join dengan profiles untuk filter kategori_tarif
-    // Karena Supabase JS tidak support langsung JOIN di UPDATE, kita pakai RPC-style:
-    // Update semua row KHUSUS yang nominalnya masih sama dengan oldTargetKhusus
-    // (asumsi: kalau user sebelumnya set khusus sama dengan normal, semua rows di oldTarget = oldTargetKhusus)
-    const { error: propErr } = await admin
-      .rpc('update_khusus_tagihan_nominal', {
-        p_dana_khusus_id: id,
-        p_old_nominal: oldTargetKhusus,
-        p_new_nominal: targetPerKkKhusus,
-      })
+  // Propagate perubahan nominal ke SELURUH tagihan (termasuk yang sudah cicil).
+  //
+  // Aturan resmi (konsisten untuk semua warga):
+  //   - Warga NORMAL  → nominal_tagihan = target_per_kk (baru)
+  //   - Warga KHUSUS  → nominal_tagihan = target_per_kk_khusus (baru)
+  //
+  // Perubahan ini berlaku untuk semua warga TANPA MEMEDULIKAN riwayat cicilan,
+  // lalu status dihitung ulang dari total_terbayar vs nominal_tagihan baru
+  // (lihat RPC resync_dana_khusus_tagihan).
+  if (newTargetNormal !== Number(existing.target_per_kk) || newTargetKhusus !== Number(existing.target_per_kk_khusus ?? newTargetNormal)) {
+    const { error: propErr } = await admin.rpc('resync_dana_khusus_tagihan', {
+      p_dana_khusus_id: id,
+      p_target_normal: newTargetNormal,
+      p_target_khusus: newTargetKhusus,
+    })
     if (propErr) {
-      // Fallback: kalau RPC belum ada, coba approach langsung via raw SQL via admin
-      console.warn('Gagal propagate target_per_kk_khusus via RPC, skip:', propErr.message)
+      console.error('Gagal resync nominal tagihan dana khusus:', propErr.message)
     }
   }
 

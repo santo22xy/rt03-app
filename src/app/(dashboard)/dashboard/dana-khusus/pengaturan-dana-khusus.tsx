@@ -188,7 +188,7 @@ export function PengaturanDanaKhusus({ dana }: Props) {
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <div>
                 <p className="font-semibold">Perubahan nominal iuran</p>
-                <p>Tagihan warga yang <strong>belum dibayar</strong> akan otomatis di-update ke nominal baru (sesuai kategori Normal/Khusus). Tagihan yang sudah dibayar sebagian / lunas tidak berubah.</p>
+                <p>Nominal seluruh tagihan warga akan disesuaikan ke nilai baru (Normal / Khusus) secara konsisten, <strong>termasuk yang sudah mencicil</strong>. Sisa &amp; status dihitung ulang otomatis dari riwayat pembayaran.</p>
               </div>
             </div>
           )}
