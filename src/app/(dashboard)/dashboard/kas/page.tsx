@@ -1,3 +1,4 @@
+
 import { createAdminClient } from '@/lib/supabase/server'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -14,8 +15,8 @@ import { ExportLaporanPDFButton } from '../export-laporan-pdf-button'
 
 // Lazy-load form transaksi (paling berat, banyak state & dialog) — tidak di-bundle di initial JS
 const TambahTransaksiKas = nextDynamic(
-  () => import('../tambah-transaksi-kas').then(m => ({ default: m.TambahTransaksiKas })),
-  { ssr: false, loading: () => <div className="h-10 w-40 bg-muted animate-pulse rounded-md" /> }
+  () =&gt; import('../tambah-transaksi-kas').then(m =&gt; ({ default: m.TambahTransaksiKas })),
+  { ssr: false, loading: () =&gt; &lt;div className="h-10 w-40 bg-muted animate-pulse rounded-md" /&gt; }
 )
 
 export const dynamic = 'force-dynamic'
@@ -41,7 +42,7 @@ type KasTransaksi = {
 export default async function KasPage({
   searchParams,
 }: {
-  searchParams: Promise<{ filter?: string; month?: string }>
+  searchParams: Promise&lt;{ filter?: string; month?: string }&gt;
 }) {
   const params = await searchParams
   const filter = (params.filter ?? 'semua').toLowerCase()
@@ -51,58 +52,34 @@ export default async function KasPage({
   const supabase = createAdminClient()
 
   // Ambil semua transaksi (tanpa limit untuk month options)
-  // First try with nota_url, if that fails (column doesn't exist) fallback to without it
-  let { data: allTrxRaw, error: queryError } = await supabase
+  const { data: allTrxRaw } = await supabase
     .from('kas_transaksi')
     .select('id, tanggal, tipe, kategori, uraian, nominal, login_id, metode_bayar, sumber_dana, ditalangi_oleh, status_talangan, catatan, created_by, created_at, nota_url')
     .order('tanggal', { ascending: false })
     .order('created_at', { ascending: false })
 
-  if (queryError) {
-    console.warn('kas/page.tsx - query with nota_url failed, trying without:', queryError)
-    // Fallback to query without nota_url
-    const fallbackResult = await supabase
-      .from('kas_transaksi')
-      .select('id, tanggal, tipe, kategori, uraian, nominal, login_id, metode_bayar, sumber_dana, ditalangi_oleh, status_talangan, catatan, created_by, created_at')
-      .order('tanggal', { ascending: false })
-      .order('created_at', { ascending: false })
-    allTrxRaw = fallbackResult.data
-    queryError = fallbackResult.error
-  }
-
-  if (queryError) {
-    console.error('kas/page.tsx - final query error:', queryError)
-  }
-
   // Generate list of available months (YYYY-MM)
-  const availableMonthsSet = new Set<string>()
+  const availableMonthsSet = new Set&lt;string&gt;()
   const allTrx = (allTrxRaw ?? []) as KasTransaksi[]
-  console.log("kas/page.tsx - allTrx.length:", allTrx.length)
-  console.log("kas/page.tsx - first 10 trx.tanggal:", allTrx.slice(0, 10).map(t => t.tanggal))
-  allTrx.forEach(t => {
+  allTrx.forEach(t =&gt; {
     const monthKey = t.tanggal.slice(0, 7)
-    console.log("kas/page.tsx - adding monthKey:", monthKey)
     availableMonthsSet.add(monthKey)
   })
   const availableMonths = Array.from(availableMonthsSet).sort() // ascending
-  console.log("kas/page.tsx - availableMonths:", availableMonths)
   if (availableMonths.length === 0) {
     const now = new Date()
     availableMonths.push(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
   }
   // Determine current month from params or default to latest available
   let currentMonth = params.month
-  console.log("kas/page.tsx - params.month:", params.month)
   if (!currentMonth || !availableMonthsSet.has(currentMonth)) {
     currentMonth = availableMonths[availableMonths.length - 1]
   }
-  console.log("kas/page.tsx - currentMonth:", currentMonth)
 
   // Filter transactions by month and type
-  let trxList = allTrx.filter(t => t.tanggal.startsWith(currentMonth))
-  console.log("kas/page.tsx - trxList.length:", trxList.length)
-  if (filter === 'masuk') trxList = trxList.filter(t => t.tipe === 'MASUK')
-  if (filter === 'keluar') trxList = trxList.filter(t => t.tipe === 'KELUAR')
+  let trxList = allTrx.filter(t =&gt; t.tanggal.startsWith(currentMonth))
+  if (filter === 'masuk') trxList = trxList.filter(t =&gt; t.tipe === 'MASUK')
+  if (filter === 'keluar') trxList = trxList.filter(t =&gt; t.tipe === 'KELUAR')
 
   // Saldo dihitung independent dari filter (full ledger)
   const { data: allTrxForSaldo } = await supabase
@@ -110,11 +87,11 @@ export default async function KasPage({
     .select('tipe, nominal')
 
   const totalMasuk = (allTrxForSaldo ?? [])
-    .filter((t) => t.tipe === 'MASUK')
-    .reduce((s, t) => s + Number(t.nominal), 0)
+    .filter((t) =&gt; t.tipe === 'MASUK')
+    .reduce((s, t) =&gt; s + Number(t.nominal), 0)
   const totalKeluar = (allTrxForSaldo ?? [])
-    .filter((t) => t.tipe === 'KELUAR')
-    .reduce((s, t) => s + Number(t.nominal), 0)
+    .filter((t) =&gt; t.tipe === 'KELUAR')
+    .reduce((s, t) =&gt; s + Number(t.nominal), 0)
   const saldo = totalMasuk - totalKeluar
 
   // Sesi jimpitan yang perlu ACC
@@ -130,13 +107,13 @@ export default async function KasPage({
   const { data: kategoriData } = await supabase
     .from('kas_kategori')
     .select('kode, label, is_active')
-  const kategoriMap: Record<string, { label: string; is_active: boolean }> = {}
+  const kategoriMap: Record&lt;string, { label: string; is_active: boolean }&gt; = {}
   for (const k of kategoriData ?? []) {
     kategoriMap[k.kode] = { label: k.label, is_active: k.is_active }
   }
 
   // Group by date
-  const grouped = trxList.reduce<Record<string, KasTransaksi[]>>((acc, t) => {
+  const grouped = trxList.reduce&lt;Record&lt;string, KasTransaksi[]&gt;&gt;((acc, t) =&gt; {
     const key = t.tanggal
     if (!acc[key]) acc[key] = []
     acc[key].push(t)
@@ -144,155 +121,155 @@ export default async function KasPage({
   }, {})
 
   return (
-    <div className="space-y-5 pb-24 md:pb-8">
+    &lt;div className="space-y-5 pb-24 md:pb-8"&gt;
       {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Receipt className="w-4 h-4 text-emerald-500" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">
-              Kas & Transaksi
-            </span>
-          </div>
-          <h1 className="text-2xl md:text-3xl font-bold">Kas RT 03</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Buku besar kas & input transaksi manual
-          </p>
-        </div>
-        <div className="flex gap-2 shrink-0">
-          <ExportLaporanButton />
-          <ExportLaporanPDFButton />
-          <TambahTransaksiKas />
-        </div>
-      </div>
+      &lt;div className="flex items-start justify-between gap-3"&gt;
+        &lt;div&gt;
+          &lt;div className="flex items-center gap-2 mb-1"&gt;
+            &lt;Receipt className="w-4 h-4 text-emerald-500" /&gt;
+            &lt;span className="text-[10px] font-bold uppercase tracking-widest text-emerald-600"&gt;
+              Kas &amp; Transaksi
+            &lt;/span&gt;
+          &lt;/div&gt;
+          &lt;h1 className="text-2xl md:text-3xl font-bold"&gt;Kas RT 03&lt;/h1&gt;
+          &lt;p className="text-sm text-muted-foreground mt-1"&gt;
+            Buku besar kas &amp; input transaksi manual
+          &lt;/p&gt;
+        &lt;/div&gt;
+        &lt;div className="flex gap-2 shrink-0"&gt;
+          &lt;ExportLaporanButton /&gt;
+          &lt;ExportLaporanPDFButton /&gt;
+          &lt;TambahTransaksiKas /&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
 
       {/* Hero Saldo */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-700 text-white shadow-xl shadow-emerald-500/20">
-        <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -mr-24 -mt-24" />
-        <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full -ml-16 -mb-16" />
-        <div className="relative p-5 md:p-6">
-          <div className="flex items-center gap-2 mb-2">
-            <Wallet className="w-4 h-4 opacity-80" />
-            <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">
+      &lt;div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-700 text-white shadow-xl shadow-emerald-500/20"&gt;
+        &lt;div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -mr-24 -mt-24" /&gt;
+        &lt;div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full -ml-16 -mb-16" /&gt;
+        &lt;div className="relative p-5 md:p-6"&gt;
+          &lt;div className="flex items-center gap-2 mb-2"&gt;
+            &lt;Wallet className="w-4 h-4 opacity-80" /&gt;
+            &lt;span className="text-[10px] font-bold uppercase tracking-widest opacity-80"&gt;
               Saldo Kas Saat Ini
-            </span>
-          </div>
-          <p className="text-3xl md:text-4xl font-bold leading-tight tracking-tight">
+            &lt;/span&gt;
+          &lt;/div&gt;
+          &lt;p className="text-3xl md:text-4xl font-bold leading-tight tracking-tight"&gt;
             {formatRupiah(saldo)}
-          </p>
-          <p className="text-[11px] opacity-80 mt-1">
+          &lt;/p&gt;
+          &lt;p className="text-[11px] opacity-80 mt-1"&gt;
             Per {formatTanggal(new Date())}
-          </p>
-          <div className="grid grid-cols-2 gap-3 mt-5">
-            <div className="bg-white/15 backdrop-blur-sm rounded-xl p-3 ring-1 ring-white/20">
-              <div className="flex items-center gap-1.5 mb-1">
-                <ArrowUpCircle className="w-3.5 h-3.5" />
-                <p className="text-[10px] font-semibold uppercase tracking-wider opacity-90">Pemasukan</p>
-              </div>
-              <p className="text-base md:text-lg font-bold truncate">{formatRupiah(totalMasuk)}</p>
-            </div>
-            <div className="bg-white/15 backdrop-blur-sm rounded-xl p-3 ring-1 ring-white/20">
-              <div className="flex items-center gap-1.5 mb-1">
-                <ArrowDownCircle className="w-3.5 h-3.5" />
-                <p className="text-[10px] font-semibold uppercase tracking-wider opacity-90">Pengeluaran</p>
-              </div>
-              <p className="text-base md:text-lg font-bold truncate">{formatRupiah(totalKeluar)}</p>
-            </div>
-          </div>
-        </div>
-      </div>
+          &lt;/p&gt;
+          &lt;div className="grid grid-cols-2 gap-3 mt-5"&gt;
+            &lt;div className="bg-white/15 backdrop-blur-sm rounded-xl p-3 ring-1 ring-white/20"&gt;
+              &lt;div className="flex items-center gap-1.5 mb-1"&gt;
+                &lt;ArrowUpCircle className="w-3.5 h-3.5" /&gt;
+                &lt;p className="text-[10px] font-semibold uppercase tracking-wider opacity-90"&gt;Pemasukan&lt;/p&gt;
+              &lt;/div&gt;
+              &lt;p className="text-base md:text-lg font-bold truncate"&gt;{formatRupiah(totalMasuk)}&lt;/p&gt;
+            &lt;/div&gt;
+            &lt;div className="bg-white/15 backdrop-blur-sm rounded-xl p-3 ring-1 ring-white/20"&gt;
+              &lt;div className="flex items-center gap-1.5 mb-1"&gt;
+                &lt;ArrowDownCircle className="w-3.5 h-3.5" /&gt;
+                &lt;p className="text-[10px] font-semibold uppercase tracking-wider opacity-90"&gt;Pengeluaran&lt;/p&gt;
+              &lt;/div&gt;
+              &lt;p className="text-base md:text-lg font-bold truncate"&gt;{formatRupiah(totalKeluar)}&lt;/p&gt;
+            &lt;/div&gt;
+          &lt;/div&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
 
       {/* Pending ACC Alert */}
-      {sesiPending && sesiPending.length > 0 && (
-        <Card className="border-0 shadow-md ring-1 ring-amber-200 bg-amber-50/60">
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-200 flex items-center justify-center shrink-0">
-              <AlertCircle className="w-5 h-5 text-amber-700" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-amber-900">
+      {sesiPending &amp;&amp; sesiPending.length &gt; 0 &amp;&amp; (
+        &lt;Card className="border-0 shadow-md ring-1 ring-amber-200 bg-amber-50/60"&gt;
+          &lt;CardContent className="p-4 flex items-center gap-3"&gt;
+            &lt;div className="w-10 h-10 rounded-xl bg-amber-200 flex items-center justify-center shrink-0"&gt;
+              &lt;AlertCircle className="w-5 h-5 text-amber-700" /&gt;
+            &lt;/div&gt;
+            &lt;div className="flex-1 min-w-0"&gt;
+              &lt;p className="text-sm font-semibold text-amber-900"&gt;
                 {sesiPending.length} sesi jimpitan perlu ACC
-              </p>
-              <p className="text-[11px] text-amber-700 mt-0.5">
+              &lt;/p&gt;
+              &lt;p className="text-[11px] text-amber-700 mt-0.5"&gt;
                 ACC agar pendapatan masuk ke kas
-              </p>
-            </div>
-            <a
+              &lt;/p&gt;
+            &lt;/div&gt;
+            &lt;a
               href="/dashboard/jimpitan"
               className="text-[10px] font-bold uppercase text-amber-700 hover:text-amber-900 shrink-0"
-            >
+            &gt;
               Lihat →
-            </a>
-          </CardContent>
-        </Card>
+            &lt;/a&gt;
+          &lt;/CardContent&gt;
+        &lt;/Card&gt;
       )}
 
       {/* Filter + List Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-bold">Buku Transaksi</h2>
-          <p className="text-[11px] text-muted-foreground mt-0.5">
+      &lt;div className="flex flex-wrap items-center justify-between gap-3"&gt;
+        &lt;div&gt;
+          &lt;h2 className="text-base font-bold"&gt;Buku Transaksi&lt;/h2&gt;
+          &lt;p className="text-[11px] text-muted-foreground mt-0.5"&gt;
             {trxList.length} transaksi
-            {filter === 'masuk' && ' (Pemasukan)'}
-            {filter === 'keluar' && ' (Pengeluaran)'}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <MonthPickerKas availableMonths={availableMonths} currentMonth={currentMonth} />
-          <FilterKas current={filter} />
-        </div>
-      </div>
+            {filter === 'masuk' &amp;&amp; ' (Pemasukan)'}
+            {filter === 'keluar' &amp;&amp; ' (Pengeluaran)'}
+          &lt;/p&gt;
+        &lt;/div&gt;
+        &lt;div className="flex flex-wrap gap-2"&gt;
+          &lt;MonthPickerKas availableMonths={availableMonths} currentMonth={currentMonth} /&gt;
+          &lt;FilterKas current={filter} /&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
 
       {/* Transaction List */}
       {trxList.length === 0 ? (
-        <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
-          <CardContent className="p-10 text-center">
-            <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
-              <Activity className="w-7 h-7 text-slate-400" />
-            </div>
-            <p className="text-sm font-semibold text-slate-700">Belum ada transaksi</p>
-            <p className="text-[11px] text-muted-foreground mt-1">
-              Klik &ldquo;Input Transaksi&rdquo; untuk catat pemasukan/pengeluaran pertama
-            </p>
-          </CardContent>
-        </Card>
+        &lt;Card className="border-0 shadow-sm ring-1 ring-slate-200/60"&gt;
+          &lt;CardContent className="p-10 text-center"&gt;
+            &lt;div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3"&gt;
+              &lt;Activity className="w-7 h-7 text-slate-400" /&gt;
+            &lt;/div&gt;
+            &lt;p className="text-sm font-semibold text-slate-700"&gt;Belum ada transaksi&lt;/p&gt;
+            &lt;p className="text-[11px] text-muted-foreground mt-1"&gt;
+              Klik &amp;ldquo;Input Transaksi&amp;rdquo; untuk catat pemasukan/pengeluaran pertama
+            &lt;/p&gt;
+          &lt;/CardContent&gt;
+        &lt;/Card&gt;
       ) : (
-        <div className="space-y-3">
-          <p className="text-[10px] text-muted-foreground text-center -mt-1">
+        &lt;div className="space-y-3"&gt;
+          &lt;p className="text-[10px] text-muted-foreground text-center -mt-1"&gt;
             💡 Klik tanggal untuk expand/collapse · Grid Debit/Kredit/Saldo per hari
-          </p>
-          <div className="space-y-4">
-            {(() => {
+          &lt;/p&gt;
+          &lt;div className="space-y-4"&gt;
+            {(() =&gt; {
               // Sort tanggal ASC (terlama → terbaru) untuk hitung saldo awal per hari
               const sortedDates = Object.keys(grouped).sort()
               let runningSaldo = 0
-              return sortedDates.map((tanggal) => {
+              return sortedDates.map((tanggal) =&gt; {
                 const items = grouped[tanggal]
                 const dayMasuk = items
-                  .filter((t) => t.tipe === 'MASUK')
-                  .reduce((s, t) => s + Number(t.nominal), 0)
+                  .filter((t) =&gt; t.tipe === 'MASUK')
+                  .reduce((s, t) =&gt; s + Number(t.nominal), 0)
                 const dayKeluar = items
-                  .filter((t) => t.tipe === 'KELUAR')
-                  .reduce((s, t) => s + Number(t.nominal), 0)
+                  .filter((t) =&gt; t.tipe === 'KELUAR')
+                  .reduce((s, t) =&gt; s + Number(t.nominal), 0)
                 const saldoAwal = runningSaldo
                 const saldoAkhir = saldoAwal + dayMasuk - dayKeluar
                 runningSaldo = saldoAkhir // carry ke tanggal berikutnya
 
                 return (
-                  <KasDateGroup
+                  &lt;KasDateGroup
                     key={tanggal}
                     tanggal={tanggal}
                     items={items as KasTransaksiItem[]}
                     saldoAwal={saldoAwal}
                     kategoriMap={kategoriMap}
-                    defaultOpen={sortedDates.length <= 3}
-                  />
+                    defaultOpen={sortedDates.length &lt;= 3}
+                  /&gt;
                 )
               })
             })()}
-          </div>
-        </div>
+          &lt;/div&gt;
+        &lt;/div&gt;
       )}
-    </div>
+    &lt;/div&gt;
   )
 }
