@@ -94,13 +94,15 @@ export default async function KasPage({
     .limit(1)
 
   const openingBalance = Number(openingBalances?.[0]?.amount ?? 0)
-  const openingDate = openingBalances?.[0]?.effective_date ?? firstDayOfMonth
+  // Jika ada cash_opening_balances, mulai hitung dari tanggal efektifnya.
+  // Jika tidak ada, hitung SEMUA transaksi sebelum bulan ini (mulai dari awal waktu).
+  const hasOpening = openingBalances && openingBalances.length > 0
 
-  // Hitung semua transaksi dari tanggal saldo awal hingga akhir bulan sebelumnya
-  const prevMonthLastDay = new Date(cy, cm - 1, 0) // hari terakhir bulan sebelumnya
-  const prevEnd = `${prevMonthLastDay.getFullYear()}-${String(prevMonthLastDay.getMonth() + 1).padStart(2, '0')}-${String(prevMonthLastDay.getDate()).padStart(2, '0')}`
-
-  const trxBeforeMonth = allTrx.filter(t => t.tanggal >= openingDate && t.tanggal <= prevEnd)
+  // Hitung semua transaksi SEBELUM awal bulan yang dipilih
+  // Rumus: saldoAwalBulan = openingBalance + (pemasukan sebelum bulan ini) - (pengeluaran sebelum bulan ini)
+  const trxBeforeMonth = hasOpening
+    ? allTrx.filter(t => t.tanggal >= openingBalances[0].effective_date && t.tanggal < firstDayOfMonth)
+    : allTrx.filter(t => t.tanggal < firstDayOfMonth)
   const masukBefore = trxBeforeMonth.filter(t => t.tipe === 'MASUK').reduce((s, t) => s + Number(t.nominal), 0)
   const keluarBefore = trxBeforeMonth.filter(t => t.tipe === 'KELUAR').reduce((s, t) => s + Number(t.nominal), 0)
   const saldoAwalBulan = openingBalance + masukBefore - keluarBefore
@@ -112,7 +114,8 @@ export default async function KasPage({
   const totalKeluar = allTrx
     .filter((t) => t.tipe === 'KELUAR')
     .reduce((s, t) => s + Number(t.nominal), 0)
-  const saldo = openingBalance + masukBefore + totalMasuk - keluarBefore - totalKeluar
+  // Saldo global = openingBalance + semua transaksi (tanpa filter bulan)
+  const saldo = openingBalance + totalMasuk - totalKeluar
 
   // Sesi jimpitan yang perlu ACC
   const { data: sesiPending } = await supabase
