@@ -20,7 +20,7 @@ import { toast } from 'sonner'
 import {
     updateJimpitanDetail, bulkSetBelumBayar, toggleKehadiran,
     submitSesi, swapPenjaga, swapAnggota,
-    accSesi, rejectSesi, cancelJimpitanSesi,
+    accSesi, rejectSesi, cancelJimpitanSesi, editJimpitanSesi, getJimpitanAuditLog,
   } from '../../jimpitan-actions'
 
 type Profile = {
@@ -143,15 +143,21 @@ export function JimpitanForm({
   const [showDebug, setShowDebug] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [cancelReasonInput, setCancelReasonInput] = useState('')
+  const [editMode, setEditMode] = useState(false)
+  const [editReason, setEditReason] = useState('')
+  const [editReasonOpen, setEditReasonOpen] = useState(false)
+  const [auditLogOpen, setAuditLogOpen] = useState(false)
 
   // Check if current user is pengurus
   const isPengurus = ['BENDAHARA', 'KETUA_RT', 'SUPERADMIN', 'SEKRETARIS', 'PENGURUS'].includes(currentUserRole)
+  const isBendahara = ['BENDAHARA', 'KETUA_RT', 'SUPERADMIN'].includes(currentUserRole)
 
   // Debug Info for user
   const canSubmit = status === 'DRAFT' || status === 'AKTIF'
   const canApprove = status === 'SUBMITTED' && isPengurus
-  const canCancel = (status === 'DRAFT' || status === 'AKTIF' || status === 'SUBMITTED') && isPengurus
-  const isLocked = status === 'APPROVED' || status === 'SUBMITTED' || status === 'CANCELLED'
+  const canCancel = (status === 'DRAFT' || status === 'AKTIF' || status === 'SUBMITTED' || status === 'APPROVED') && isPengurus
+  const canEdit = ((status === 'SUBMITTED' || status === 'APPROVED') && isBendahara) || ((status === 'DRAFT' || status === 'AKTIF') && isPengurus)
+  const isLocked = (status === 'APPROVED' && !editMode) || (status === 'SUBMITTED' && !editMode) || status === 'CANCELLED'
   const grouped = useMemo(() => {
     const g: Record<string, Profile[]> = {}
     profiles
@@ -372,6 +378,10 @@ export function JimpitanForm({
       toast.error('Alasan pembatalan wajib diisi')
       return
     }
+    if (cancelReasonInput.trim().length < 5) {
+      toast.error('Alasan minimal 5 karakter')
+      return
+    }
     setCancelOpen(false)
     const alasan = cancelReasonInput
     setCancelReasonInput('')
@@ -380,8 +390,63 @@ export function JimpitanForm({
       fd.append('sesiId', sesiId)
       fd.append('alasan', alasan)
       const res = await cancelJimpitanSesi(fd)
-      if (res?.error) toast.error(res.error)
-      else toast.success('Sesi berhasil dibatalkan')
+      if (res?.error) {
+        toast.error(res.error)
+      } else if (res.old_total) {
+        toast.success(`Sesi dibatalkan. Transaksi kas Rp${formatRupiah(res.old_total)} telah di-void.`)
+      } else {
+        toast.success('Sesi berhasil dibatalkan')
+      }
+    })
+  }
+
+  function doEdit() {
+    if (!editReason.trim() || editReason.trim().length < 5) {
+      toast.error('Alasan perubahan wajib diisi minimal 5 karakter')
+      return
+    }
+    setEditReasonOpen(false)
+    const reason = editReason
+    setEditReason('')
+    startTransition(async () => {
+      const fd = new FormData()
+      fd.append('sesiId', sesiId)
+      fd.append('reason', reason)
+      fd.append('details', JSON.stringify(
+        Object.entries(details).map(([profileId, d]) => {
+          const p = profiles.find((x) => x.id === profileId)
+          return {
+            profile_id: profileId,
+            login_id: p?.login_id ?? '',
+            nama_kk_snapshot: p?.nama_kk ?? '',
+            nominal: d.nominal,
+            is_bayar: d.is_bayar,
+            status_bayar: d.is_bayar ? 'BAYAR' : 'BELUM',
+          }
+        })
+      ))
+      fd.append('attendance', JSON.stringify(
+        Array.from(att).map((profileId) => {
+          const p = profiles.find((x) => x.id === profileId)
+          return {
+            profile_id: profileId,
+            nama_snapshot: p?.nama_kk ?? '',
+            login_id: p?.login_id ?? '',
+          }
+        })
+      ))
+      const res = await editJimpitanSesi(fd)
+      if (res?.error) {
+        toast.error(res.error)
+      } else if (status === 'APPROVED' && res.diff !== undefined) {
+        const diffAbs = Math.abs(res.diff)
+        const arah = res.diff > 0 ? 'bertambah' : 'berkurang'
+        toast.success(`Sesi diperbarui. Kas ${arah} Rp${formatRupiah(diffAbs)}.`)
+        setEditMode(false)
+      } else {
+        toast.success('Sesi berhasil diperbarui')
+        setEditMode(false)
+      }
     })
   }
 
@@ -544,17 +609,90 @@ export function JimpitanForm({
             )}
           </div>
 
-          {/* Cancel Button */}
-          {canCancel && (
-            <div className="pt-3 border-t border-slate-200 mt-3">
-              <Button
-                variant="outline"
-                onClick={() => setCancelOpen(true)}
-                className="w-full border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
-              >
-                <XCircle className="w-4 h-4 mr-2" />
-                Batalkan Sesi Ini
-              </Button>
+          {/* Action Buttons: Edit, Cancel, Audit Log */}
+          {(canEdit || canCancel) && status !== 'CANCELLED' && (
+            <div className="pt-3 border-t border-slate-200 mt-3 space-y-2">
+              {/* Warning untuk sesi APPROVED */}
+              {status === 'APPROVED' && !editMode && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-2">
+                  <p className="text-amber-800 text-[11px] font-semibold flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Data ini sudah disetujui dan telah memengaruhi kas. Perubahan akan memperbarui transaksi kas dan saldo terkait.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                {/* Edit Button */}
+                {canEdit && !editMode && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (status === 'APPROVED' || status === 'SUBMITTED') {
+                        setEditReasonOpen(true)
+                      } else {
+                        setEditMode(true)
+                      }
+                    }}
+                    className="flex-1 border-blue-300 text-blue-700 hover:bg-blue-50"
+                  >
+                    <Shield className="w-4 h-4 mr-2" />
+                    Edit Data
+                  </Button>
+                )}
+
+                {/* Save Edit Button */}
+                {editMode && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => { setEditMode(false); setEditReason('') }}
+                      className="flex-1"
+                    >
+                      Batal Edit
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        if (status === 'APPROVED' || status === 'SUBMITTED') {
+                          setEditReasonOpen(true)
+                        } else {
+                          doEdit()
+                        }
+                      }}
+                      disabled={isPending}
+                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                    >
+                      {isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}
+                      Simpan Perubahan
+                    </Button>
+                  </>
+                )}
+
+                {/* Cancel Button */}
+                {canCancel && !editMode && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setCancelOpen(true)}
+                    className="flex-1 border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+                  >
+                    <XCircle className="w-4 h-4 mr-2" />
+                    Batalkan Sesi
+                  </Button>
+                )}
+              </div>
+
+              {/* Audit Log Button */}
+              {isBendahara && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setAuditLogOpen(true)}
+                  className="w-full text-xs text-slate-500 hover:text-slate-700"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />
+                  Riwayat Perubahan
+                </Button>
+              )}
             </div>
           )}
         </CardContent>
@@ -853,12 +991,25 @@ export function JimpitanForm({
       )}
 
       {/* Lock notice */}
-      {isLocked && (
+      {isLocked && !editMode && (
         <Card className="border-0 shadow-sm ring-1 ring-slate-200/60 bg-slate-50">
           <CardContent className="p-3 flex items-center gap-2 text-xs">
             <Lock className="w-4 h-4 text-slate-500" />
             <span className="text-slate-600">
-              Sesi sudah {status === 'APPROVED' ? 'disetujui bendahara' : 'disubmit'} - tidak bisa diubah
+              {status === 'CANCELLED'
+                ? 'Sesi ini telah dibatalkan'
+                : `Sesi sudah ${status === 'APPROVED' ? 'disetujui bendahara' : 'disubmit'} - tidak bisa diubah`}
+            </span>
+          </CardContent>
+        </Card>
+      )}
+      {editMode && (
+        <Card className="border-0 shadow-sm ring-1 ring-blue-300 bg-blue-50">
+          <CardContent className="p-3 flex items-center gap-2 text-xs">
+            <Shield className="w-4 h-4 text-blue-600" />
+            <span className="text-blue-700 font-semibold">
+              Mode Edit — Ubah data warga di bawah, lalu klik Simpan Perubahan
+              {status === 'APPROVED' && ' (Perubahan akan memperbarui transaksi kas)'}
             </span>
           </CardContent>
         </Card>
@@ -1522,11 +1673,12 @@ export function JimpitanForm({
             </div>
 
             {status === 'APPROVED' && (
-              <div className="flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <p className="text-[11px] text-amber-800 leading-relaxed">
-                  <span className="font-semibold">Peringatan:</span> Sesi ini sudah di-ACC dan masuk kas!
-                  Anda harus melakukan koreksi manual di transaksi kas setelah membatalkan.
+              <div className="flex items-start gap-2 p-2.5 bg-rose-50 border border-rose-200 rounded-lg">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-rose-800 leading-relaxed">
+                  <span className="font-semibold">Peringatan:</span> Sesi ini sudah masuk ke kas sebesar <strong>{formatRupiah(totalNominal)}</strong>.
+                  Pembatalan akan meng-void transaksi kas terkait dan membuat transaksi reversal.
+                  Saldo kas akan berkurang sebesar nominal tersebut.
                 </p>
               </div>
             )}
@@ -1565,6 +1717,197 @@ export function JimpitanForm({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Dialog: Alasan Edit (untuk sesi SUBMITTED/APPROVED) */}
+      <Dialog open={editReasonOpen} onOpenChange={setEditReasonOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="mx-auto w-14 h-14 rounded-full bg-gradient-to-br from-blue-400 to-indigo-600 flex items-center justify-center mb-1 shadow-lg shadow-blue-500/30">
+              <Shield className="w-7 h-7 text-white" />
+            </div>
+            <DialogTitle className="text-center">
+              {status === 'APPROVED' ? 'Edit Sesi yang Sudah Disetujui' : 'Edit Sesi Submitted'}
+            </DialogTitle>
+            <DialogDescription className="text-center">
+              {status === 'APPROVED'
+                ? 'Perubahan akan memperbarui transaksi kas terkait. Wajib isi alasan.'
+                : 'Wajib isi alasan perubahan sebelum menyimpan.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 my-2">
+            <div>
+              <label className="text-xs font-semibold text-slate-700 mb-1.5 block">
+                Alasan perubahan <span className="text-rose-600">*</span>
+              </label>
+              <Textarea
+                value={editReason}
+                onChange={(e) => setEditReason(e.target.value)}
+                placeholder="Misal: Koreksi nominal Bpk Budi yang salah input, seharusnya Rp15.000."
+                rows={3}
+                className="text-sm"
+                autoFocus
+              />
+              <p className="text-[10px] text-slate-500 mt-1">Minimal 5 karakter</p>
+            </div>
+
+            {status === 'APPROVED' && (
+              <div className="flex items-start gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg">
+                <AlertTriangle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-blue-800 leading-relaxed">
+                  <span className="font-semibold">Catatan:</span> Transaksi kas akan diperbarui secara otomatis sesuai perubahan nominal.
+                  Audit log akan menyimpan catatan lengkap.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="sm:justify-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => { setEditReasonOpen(false); setEditReason('') }}
+              disabled={isPending}
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              onClick={doEdit}
+              disabled={isPending || editReason.trim().length < 5}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Memproses...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  Simpan & Edit
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Audit Log */}
+      <AuditLogDialog
+        open={auditLogOpen}
+        onOpenChange={setAuditLogOpen}
+        sesiId={sesiId}
+      />
     </div>
+  )
+}
+
+// =====================================================
+// Komponen: Dialog Audit Log (client component)
+// =====================================================
+function AuditLogDialog({
+  open,
+  onOpenChange,
+  sesiId,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  sesiId: string
+}) {
+  const [logs, setLogs] = useState<Array<{
+    id: string
+    action: string
+    old_data: Record<string, unknown> | null
+    new_data: Record<string, unknown> | null
+    old_total: number | null
+    new_total: number | null
+    reason: string | null
+    changed_by_name: string | null
+    changed_at: string
+  }>>([])
+  const [loading, setLoading] = useState(false)
+
+  const actionLabels: Record<string, string> = {
+    edit_submitted: 'Edit Sesi Submitted',
+    cancel_submitted: 'Batalkan Sesi Submitted',
+    edit_approved: 'Edit Sesi Approved',
+    cancel_approved: 'Batalkan Sesi Approved',
+    restore_session: 'Pulihkan Sesi',
+  }
+
+  const actionColors: Record<string, string> = {
+    edit_submitted: 'bg-blue-100 text-blue-700',
+    cancel_submitted: 'bg-rose-100 text-rose-700',
+    edit_approved: 'bg-amber-100 text-amber-700',
+    cancel_approved: 'bg-rose-100 text-rose-700',
+    restore_session: 'bg-emerald-100 text-emerald-700',
+  }
+
+  async function fetchLogs() {
+    setLoading(true)
+    const result = await getJimpitanAuditLog(sesiId)
+    if (result.data) setLogs(result.data)
+    setLoading(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (v) fetchLogs() }}>
+      <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-blue-600" />
+            Riwayat Perubahan
+          </DialogTitle>
+          <DialogDescription>Catatan semua perubahan yang dilakukan pada sesi ini</DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="text-center py-8 text-sm text-slate-500">
+            Belum ada riwayat perubahan
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {logs.map((log) => (
+              <div key={log.id} className="border border-slate-200 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <Badge className={actionColors[log.action] ?? 'bg-slate-100 text-slate-700'}>
+                    {actionLabels[log.action] ?? log.action}
+                  </Badge>
+                  <span className="text-[10px] text-slate-500">
+                    {new Date(log.changed_at).toLocaleString('id-ID')}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600">
+                  Oleh: <span className="font-semibold">{log.changed_by_name ?? '-'}</span>
+                </p>
+                {log.reason && (
+                  <p className="text-xs text-slate-700 bg-slate-50 p-2 rounded">
+                    Alasan: {log.reason}
+                  </p>
+                )}
+                {log.old_total != null && log.new_total != null && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-slate-500">Total:</span>
+                    <span className="font-mono">{formatRupiah(Number(log.old_total))}</span>
+                    <span className="text-slate-400">→</span>
+                    <span className="font-mono font-bold">{formatRupiah(Number(log.new_total))}</span>
+                    {Number(log.old_total) !== Number(log.new_total) && (
+                      <Badge className={Number(log.new_total) > Number(log.old_total) ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}>
+                        {Number(log.new_total) > Number(log.old_total) ? '+' : ''}{formatRupiah(Number(log.new_total) - Number(log.old_total))}
+                      </Badge>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }

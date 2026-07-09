@@ -305,6 +305,7 @@ export async function createJimpitanSesi(formData: FormData): Promise<{
 export async function cancelJimpitanSesi(formData: FormData): Promise<{
   success?: boolean
   error?: string
+  old_total?: number
 }> {
   const profile = await getCurrentUser()
   if (!profile) return { error: 'Anda belum login' }
@@ -313,10 +314,11 @@ export async function cancelJimpitanSesi(formData: FormData): Promise<{
   const sesiId = formData.get('sesiId') as string
   const alasan = formData.get('alasan') as string
   if (!sesiId) return { error: 'Sesi ID tidak ditemukan' }
-  if (!alasan) return { error: 'Alasan pembatalan wajib diisi' }
+  if (!alasan || alasan.trim().length < 5) return { error: 'Alasan pembatalan wajib diisi minimal 5 karakter' }
 
   const admin = createAdminClient()
 
+  // Cek status sesi untuk menentukan RPC yang tepat
   const { data: sesi } = await admin
     .from('jimpitan_sesi')
     .select('id, status, total_nominal')
@@ -326,27 +328,158 @@ export async function cancelJimpitanSesi(formData: FormData): Promise<{
   if (!sesi) return { error: 'Sesi tidak ditemukan' }
 
   if (sesi.status === 'APPROVED') {
-    // Warning: butuh koreksi kas, tapi tetap izinkan cancel (sesuai user request)
-    console.warn('Sesi sudah di-APPROVED. Pembatalan butuh koreksi manual di kas_transaksi.')
+    // Batalkan sesi approved: void kas + buat reversal
+    const { data, error } = await admin.rpc('cancel_jimpitan_approved', {
+      p_sesi_id: sesiId,
+      p_cancelled_by: profile.id,
+      p_cancelled_by_name: profile.nama_kk,
+      p_reason: alasan.trim(),
+    })
+    if (error) return { error: `Gagal membatalkan sesi: ${error.message}` }
+    if (data?.error) return { error: data.error }
+
+    revalidatePath('/dashboard/kas')
+    revalidatePath('/dashboard/jimpitan')
+    revalidatePath(`/dashboard/jimpitan/${sesiId}`)
+    revalidatePath('/dashboard')
+    revalidatePath('/warga')
+    return { success: true, old_total: data?.old_total }
+  } else if (['DRAFT', 'AKTIF', 'SUBMITTED'].includes(sesi.status)) {
+    // Batalkan sesi belum approved
+    const { data, error } = await admin.rpc('cancel_jimpitan_submitted', {
+      p_sesi_id: sesiId,
+      p_cancelled_by: profile.id,
+      p_cancelled_by_name: profile.nama_kk,
+      p_reason: alasan.trim(),
+    })
+    if (error) return { error: `Gagal membatalkan sesi: ${error.message}` }
+    if (data?.error) return { error: data.error }
+
+    revalidatePath('/dashboard/jimpitan')
+    revalidatePath(`/dashboard/jimpitan/${sesiId}`)
+    revalidatePath('/warga')
+    return { success: true }
+  } else {
+    return { error: `Sesi berstatus ${sesi.status} tidak bisa dibatalkan` }
+  }
+}
+
+// =====================================================
+// BENDAHARA: EDIT SESI JIMPITAN (submitted atau approved)
+// =====================================================
+export async function editJimpitanSesi(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+  old_total?: number
+  new_total?: number
+  diff?: number
+}> {
+  const profile = await getCurrentUser()
+  if (!profile) return { error: 'Anda belum login' }
+  if (!isPengurus(profile)) return { error: 'Hanya pengurus yang boleh mengedit sesi' }
+
+  const sesiId = formData.get('sesiId') as string
+  const reason = formData.get('reason') as string
+  const detailsJson = formData.get('details') as string
+  const attendanceJson = formData.get('attendance') as string | null
+  const catatan = formData.get('catatan') as string | null
+
+  if (!sesiId) return { error: 'Sesi ID tidak ditemukan' }
+  if (!reason || reason.trim().length < 5) return { error: 'Alasan perubahan wajib diisi minimal 5 karakter' }
+  if (!detailsJson) return { error: 'Data detail jimpitan wajib diisi' }
+
+  let details: Array<{ profile_id: string; login_id: string; nama_kk_snapshot: string; nominal: number; is_bayar: boolean; status_bayar: string }> = []
+  try { details = JSON.parse(detailsJson) } catch { return { error: 'Format detail tidak valid' } }
+
+  let attendance: Array<{ profile_id: string; nama_snapshot: string; login_id: string }> = []
+  if (attendanceJson) {
+    try { attendance = JSON.parse(attendanceJson) } catch { return { error: 'Format absensi tidak valid' } }
   }
 
-  const { error } = await admin
+  const admin = createAdminClient()
+
+  // Cek status sesi
+  const { data: sesi } = await admin
     .from('jimpitan_sesi')
-    .update({
-      status: 'CANCELLED',
-      cancelled_by_user_id: profile.id,
-      cancelled_by_name: profile.nama_kk,
-      cancelled_at: new Date().toISOString(),
-      cancel_reason: alasan,
-      updated_at: new Date().toISOString(),
-    })
+    .select('id, status, total_nominal')
     .eq('id', sesiId)
+    .maybeSingle()
 
-  if (error) return { error: `Gagal membatalkan sesi: ${error.message}` }
+  if (!sesi) return { error: 'Sesi tidak ditemukan' }
 
-  revalidatePath('/dashboard/jimpitan')
-  revalidatePath('/warga')
-  return { success: true }
+  if (sesi.status === 'APPROVED') {
+    // Edit sesi approved: update detail + update kas_transaksi yang sama
+    const { data, error } = await admin.rpc('edit_jimpitan_approved', {
+      p_sesi_id: sesiId,
+      p_changed_by: profile.id,
+      p_changed_by_name: profile.nama_kk,
+      p_reason: reason.trim(),
+      p_details: details,
+      p_attendance: attendance.length > 0 ? attendance : null,
+      p_catatan: catatan || null,
+    })
+    if (error) return { error: `Gagal mengedit sesi: ${error.message}` }
+    if (data?.error) return { error: data.error }
+
+    revalidatePath('/dashboard/kas')
+    revalidatePath('/dashboard/jimpitan')
+    revalidatePath(`/dashboard/jimpitan/${sesiId}`)
+    revalidatePath('/dashboard')
+    revalidatePath('/warga')
+    return { success: true, old_total: data?.old_total, new_total: data?.new_total, diff: data?.diff }
+  } else if (['SUBMITTED', 'AKTIF', 'DRAFT'].includes(sesi.status)) {
+    // Edit sesi submitted: hanya update detail, belum masuk kas
+    const { data, error } = await admin.rpc('edit_jimpitan_submitted', {
+      p_sesi_id: sesiId,
+      p_changed_by: profile.id,
+      p_changed_by_name: profile.nama_kk,
+      p_reason: reason.trim(),
+      p_details: details,
+      p_attendance: attendance.length > 0 ? attendance : null,
+      p_catatan: catatan || null,
+    })
+    if (error) return { error: `Gagal mengedit sesi: ${error.message}` }
+    if (data?.error) return { error: data.error }
+
+    revalidatePath('/dashboard/jimpitan')
+    revalidatePath(`/dashboard/jimpitan/${sesiId}`)
+    revalidatePath('/warga')
+    return { success: true, new_total: data?.new_total }
+  } else {
+    return { error: `Sesi berstatus ${sesi.status} tidak bisa diedit` }
+  }
+}
+
+// =====================================================
+// AMBIL AUDIT LOG SESI JIMPITAN
+// =====================================================
+export async function getJimpitanAuditLog(sesiId: string): Promise<{
+  data?: Array<{
+    id: string
+    action: string
+    old_data: Record<string, unknown> | null
+    new_data: Record<string, unknown> | null
+    old_total: number | null
+    new_total: number | null
+    reason: string | null
+    changed_by_name: string | null
+    changed_at: string
+  }>
+  error?: string
+}> {
+  const profile = await getCurrentUser()
+  if (!profile) return { error: 'Tidak terautentikasi' }
+  if (!isPengurus(profile)) return { error: 'Hanya pengurus yang boleh melihat audit log' }
+
+  const admin = createAdminClient()
+  const { data, error } = await admin
+    .from('jimpitan_audit_log')
+    .select('id, action, old_data, new_data, old_total, new_total, reason, changed_by_name, changed_at')
+    .eq('session_id', sesiId)
+    .order('changed_at', { ascending: false })
+
+  if (error) return { error: error.message }
+  return { data: data ?? [] }
 }
 
 // =====================================================
