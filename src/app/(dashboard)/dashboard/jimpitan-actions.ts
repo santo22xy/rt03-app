@@ -767,6 +767,63 @@ export async function getActiveResidents() {
     .neq('blok', 'X')
   return profiles ?? []
 }
+export async function getGuardMembersForDate(tanggal: string): Promise<Array<{
+  profile_id: string
+  nama_kk_snapshot: string
+}>> {
+  const admin = createAdminClient()
+  const dayOfMonth = new Date(tanggal + 'T00:00:00').getDate()
+  const mingguKe = Math.ceil(dayOfMonth / 7)
+  const kelompokId = `K${mingguKe}`
+
+  const { data } = await admin
+    .from('ronda_kelompok')
+    .select('profile_id, nama_kk_snapshot')
+    .eq('kelompok_id', kelompokId)
+    .eq('is_active', true)
+
+  return data ?? []
+}
+
+export async function getSessionAttendanceSummary(sesiId: string) {
+  const admin = createAdminClient()
+  const { data: sesi } = await admin
+    .from('jimpitan_sesi')
+    .select('tanggal')
+    .eq('id', sesiId)
+    .single()
+
+  const tanggal = sesi?.tanggal
+  if (!tanggal) return { totalMembers: 0, present: 0, excused: 0, absent: 0, unfilled: 0, hasAttendanceData: false }
+
+  const dayOfMonth = new Date(tanggal + 'T00:00:00').getDate()
+  const mingguKe = Math.ceil(dayOfMonth / 7)
+
+  const { data: anggota } = await admin
+    .from('ronda_kelompok')
+    .select('profile_id, nama_kk_snapshot')
+    .eq('kelompok_id', `K${mingguKe}`)
+    .eq('is_active', true)
+
+  const { data: attendance } = await admin
+    .from('ronda_attendance')
+    .select('profile_id')
+    .eq('sesi_id', sesiId)
+
+  const totalMembers = anggota?.length ?? 0
+  const present = attendance?.length ?? 0
+  const hasAttendanceData = attendance !== null && attendance.length > 0
+
+  return {
+    totalMembers,
+    present,
+    excused: 0,
+    absent: totalMembers - present,
+    unfilled: hasAttendanceData ? 0 : totalMembers,
+    hasAttendanceData,
+  }
+}
+
 export async function bulkSetBelumBayar(sesiId: string) {
   const profile = await getCurrentWarga() || await getCurrentUser()
   if (!profile) return { error: 'Tidak terautentikasi' }
@@ -1244,6 +1301,7 @@ export async function pengurusInputJimpitanManual(formData: FormData): Promise<{
 
   const tanggal = formData.get('tanggal') as string
   const detailsJson = formData.get('details') as string | null
+  const attendanceJson = formData.get('attendance') as string | null
   if (!tanggal) return { error: 'Tanggal wajib dipilih' }
   if (!detailsJson) return { error: 'Data detail jimpitan wajib diisi' }
 
@@ -1252,6 +1310,15 @@ export async function pengurusInputJimpitanManual(formData: FormData): Promise<{
     details = JSON.parse(detailsJson)
   } catch (e) {
     return { error: 'Format data detail tidak valid' }
+  }
+
+  let attendanceInput: Array<{ profile_id: string; nama_snapshot: string; hadir: boolean }> = []
+  if (attendanceJson) {
+    try {
+      attendanceInput = JSON.parse(attendanceJson)
+    } catch (e) {
+      // ignore malformed attendance, treat as empty
+    }
   }
 
   const admin = createAdminClient()
@@ -1339,6 +1406,19 @@ export async function pengurusInputJimpitanManual(formData: FormData): Promise<{
     await admin.from('jimpitan_sesi').delete().eq('id', sesiId)
     return { error: `Gagal memasukkan detail: ${detailErr.message}` }
   }
+
+  // 5. Insert absensi penjaga yang hadir
+  const hadirMembers = attendanceInput.filter(a => a.hadir)
+  if (hadirMembers.length > 0) {
+    const attendanceRows = hadirMembers.map(a => ({
+      sesi_id: sesiId,
+      profile_id: a.profile_id,
+      nama_snapshot: a.nama_snapshot,
+      is_pengganti: false,
+    }))
+    await admin.from('ronda_attendance').upsert(attendanceRows, { onConflict: 'sesi_id,profile_id' })
+  }
+  await recalcJumlahPenjagaHadir(sesiId)
 
   // Hitung ringkasan dari detail yang baru di-insert agar summary langsung akurat
   // (tidak menunggu ACC untuk mengisi field summary)

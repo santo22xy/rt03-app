@@ -6,7 +6,8 @@ import {
   Search, 
   Loader2,
   ArrowUpCircle,
-  ArrowDownCircle
+  ArrowDownCircle,
+  Users
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,7 +22,8 @@ import {
   DialogTrigger 
 } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
-import { getActiveResidents, pengurusInputJimpitanManual } from '../jimpitan-actions'
+import { Badge } from '@/components/ui/badge'
+import { getActiveResidents, getGuardMembersForDate, pengurusInputJimpitanManual } from '../jimpitan-actions'
 import { formatRupiah } from '@/lib/format'
 import { toast } from 'sonner'
 
@@ -49,6 +51,9 @@ export function ManualJimpitanForm({ role }: ManualJimpitanFormProps) {
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0])
   const [data, setData] = useState<Record<string, { nominal: number; isBayar: boolean }>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [guardMembers, setGuardMembers] = useState<Array<{ profile_id: string; nama_kk_snapshot: string }>>([])
+  const [attendance, setAttendance] = useState<Record<string, boolean>>({})
+  const [loadingGuard, setLoadingGuard] = useState(false)
 
   useEffect(() => {
     async function fetchResidents() {
@@ -78,6 +83,30 @@ export function ManualJimpitanForm({ role }: ManualJimpitanFormProps) {
     }
     fetchResidents()
   }, [])
+
+  // Fetch guard members when date changes
+  useEffect(() => {
+    if (!selectedDate) return
+    let cancelled = false
+    setLoadingGuard(true)
+    setAttendance({})
+    getGuardMembersForDate(selectedDate)
+      .then(members => {
+        if (cancelled) return
+        setGuardMembers(members)
+        // Default semua hadir
+        const defaultAttendance: Record<string, boolean> = {}
+        members.forEach(m => { defaultAttendance[m.profile_id] = true })
+        setAttendance(defaultAttendance)
+      })
+      .catch(() => {
+        if (!cancelled) setGuardMembers([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingGuard(false)
+      })
+    return () => { cancelled = true }
+  }, [selectedDate])
 
   const handleNominalChange = (id: string, val: string) => {
     const num = parseInt(val.replace(/\D/g, ''), 10) || 0
@@ -119,6 +148,16 @@ export function ManualJimpitanForm({ role }: ManualJimpitanFormProps) {
       const formData = new FormData()
       formData.append('tanggal', selectedDate)
       formData.append('details', JSON.stringify(details))
+
+      // Sertakan data absensi penjaga
+      if (guardMembers.length > 0) {
+        const attendanceData = guardMembers.map(m => ({
+          profile_id: m.profile_id,
+          nama_snapshot: m.nama_kk_snapshot,
+          hadir: attendance[m.profile_id] ?? false,
+        }))
+        formData.append('attendance', JSON.stringify(attendanceData))
+      }
 
       const result = await pengurusInputJimpitanManual(formData)
 
@@ -316,6 +355,45 @@ export function ManualJimpitanForm({ role }: ManualJimpitanFormProps) {
               </table>
             </div>
           </div>
+        </div>
+
+        {/* Absensi Penjaga */}
+        <div className="space-y-3 px-1">
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Absensi Penjaga</span>
+            {!loadingGuard && guardMembers.length > 0 && (
+              <Badge variant="secondary" className="ml-auto text-xs">
+                {Object.values(attendance).filter(Boolean).length}/{guardMembers.length} hadir
+              </Badge>
+            )}
+          </div>
+          {loadingGuard ? (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : guardMembers.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-2">
+              Tidak ada jadwal penjaga untuk tanggal ini
+            </p>
+          ) : (
+            <div className="rounded-md border divide-y">
+              {guardMembers.map(m => (
+                <label
+                  key={m.profile_id}
+                  className={`flex items-center gap-3 px-3 py-2 cursor-pointer ${attendance[m.profile_id] ? 'bg-emerald-50/50' : ''}`}
+                >
+                  <Checkbox
+                    checked={attendance[m.profile_id] ?? false}
+                    onCheckedChange={(checked) =>
+                      setAttendance(prev => ({ ...prev, [m.profile_id]: !!checked }))
+                    }
+                  />
+                  <span className="text-sm">{m.nama_kk_snapshot}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
 
         <DialogFooter>

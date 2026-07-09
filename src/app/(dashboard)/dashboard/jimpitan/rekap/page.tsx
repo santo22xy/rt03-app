@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { getJimpitanRecap, allocateExcess, type RekapRow } from '../../jimpitan-actions'
+import { ExportRekapJimpitanPDF } from './export-rekap-pdf'
 
 const BULAN_LIST = [
   { value: '01', label: 'Januari' }, { value: '02', label: 'Februari' },
@@ -148,6 +149,11 @@ export default function RekapJimpitanPage() {
     return <Badge className={`${c.color} hover:${c.color} text-[9px]`}>{c.label}</Badge>
   }
 
+  async function getDataForPeriod(periode: string): Promise<RekapRow[]> {
+    const result = await getJimpitanRecap(periode)
+    return result.data ?? []
+  }
+
   return (
     <div className="space-y-5 pb-24 md:pb-8">
       {/* Header */}
@@ -159,6 +165,11 @@ export default function RekapJimpitanPage() {
           <h1 className="text-xl md:text-2xl font-bold">Rekap Jimpitan Bulanan</h1>
           <p className="text-xs text-muted-foreground">Status pembayaran jimpitan per warga per bulan</p>
         </div>
+        <ExportRekapJimpitanPDF
+          getDataForPeriod={getDataForPeriod}
+          currentBulan={bulan}
+          currentTahun={tahun}
+        />
       </div>
 
       {/* Filter */}
