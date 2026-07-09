@@ -89,9 +89,13 @@
 ### Iuran Bulanan
 - **File utama**: `src/app/(dashboard)/dashboard/iuran/page.tsx`
 - **Server actions**: `src/app/(dashboard)/dashboard/iuran/bulk-actions.ts`
+- **Pembayaran langsung**: `src/app/(dashboard)/dashboard/iuran/direct-payment-dialog.tsx`
 - **Sinkronisasi kategori**: `src/app/(dashboard)/dashboard/iuran/sync-kategori-button.tsx`
 - Kategori di-resolve dengan fallback: `jimpitan_tagihan.kategori` → `profiles.kategori_tarif`
 - Summary cards menghitung dari resolved kategori (bukan raw tagihan kategori)
+- **Jimpitan = cicilan Iuran Bulanan** (bukan tagihan terpisah)
+- **Pembayaran langsung**: form dialog, auto-allocate (tunggakan → bulan berjalan → kredit)
+- **Tabel baru**: `monthly_payments`, `monthly_payment_allocations`, `resident_credit_balance`
 - Bulk Input di `src/app/(dashboard)/dashboard/iuran/bulk-input-client.tsx`
 
 ### Jimpitan
@@ -260,12 +264,63 @@
 - **Hasil pengujian**: Build sukses, pushed ke GitHub (commit `45a7d13`)
 - **Status**: Selesai
 
+### [2026-07-09 20:00 WIB] Sistem Pembayaran Iuran Bulanan Terintegrasi Jimpitan
+- **Permintaan**: Jimpitan = cicilan Iuran Bulanan. Tambah pembayaran langsung, alokasi multi-bulan, kredit, hibah.
+- **Konsep desain**:
+  - Jimpitan bukan tagihan terpisah — metode cicilan untuk Iuran Bulanan
+  - Pembayaran: Jimpitan (via sesi) atau Langsung (via form Bendahara)
+  - Alokasi: per-bulan, tunggakan, di muka, kredit, hibah
+  - Kas masuk saat uang diterima, bukan saat alokasi
+- **Perubahan yang dilakukan**:
+  1. `sql/95-integrated-payment-system.sql`:
+     - Tabel `monthly_payments`: menyimpan setiap penerimaan uang
+     - Tabel `monthly_payment_allocations`: alokasi per-bulan dari setiap pembayaran
+     - Tabel `resident_credit_balance`: saldo kredit per warga
+     - RPC `get_warga_payment_summary(UUID, DATE)`: ringkasan pembayaran warga
+     - RPC `input_direct_payment(...)`: pembayaran langsung + auto-allocate + kas masuk
+     - RPC `sync_tagihan_from_allocations(UUID)`: sinkronisasi tagihan dari alokasi
+     - RPC `get_all_warga_payment_status(DATE)`: ringkasan semua warga periode tertentu
+     - Backfill dari data jimpitan approved yang sudah ada
+  2. `iuran/bulk-actions.ts`:
+     - Tambah interface `WargaPaymentSummary`, `PeriodePaymentRow`
+     - Tambah `getWargaPaymentSummary()`: ringkasan warga via RPC
+     - Tambah `inputPembayaranLangsung()`: wrapper RPC pembayaran langsung
+     - Tambah `getPeriodePaymentStatus()`: wrapper RPC ringkasan periode
+  3. `iuran/direct-payment-dialog.tsx` (baru):
+     - Dialog input pembayaran langsung
+     - Pilih warga → tampilkan ringkasan (target, jimpitan, langsung, kredit, tunggakan)
+     - Input tanggal, nominal, metode, catatan
+     - Info alokasi otomatis
+  4. `iuran/direct-payment-button.tsx` (baru):
+     - Client wrapper untuk tombol + dialog
+  5. `iuran/page.tsx`:
+     - Tambah tombol "Bayar Langsung" di header
+- **Struktur data baru**:
+  - `monthly_payments`: id, profile_id, payment_date, total_amount, payment_channel (jimpitan/direct), payment_method, source_type, source_id, status, notes, created_by, approved_by, cancelled_at
+  - `monthly_payment_allocations`: id, payment_id, profile_id, period_month, period_year, allocated_amount, allocation_type (arrears/current_month/advance/credit/donation/unallocated)
+  - `resident_credit_balance`: profile_id (PK), credit_balance, total_donated
+- **Alokasi otomatis**: tunggakan paling lama → bulan berjalan → sisa jadi kredit
+- **Integrasi kas**: `input_direct_payment` buat `kas_transaksi` MASUK langsung
+- **Backfill**: data jimpitan approved yang sudah ada → `monthly_payments` dengan `payment_channel='jimpitan'`
+- **File yang diubah**: 3 file baru + 2 file modified
+- **Migration**: SQL 95 wajib dijalankan di Supabase SQL Editor
+- **Hasil pengujian**: Build sukses, pushed ke GitHub (commit `af64506`)
+- **Status**: Selesai (fase 1: pembayaran langsung + alokasi otomatis)
+- **Pekerjaan lanjutan**:
+  - Dialog alokasi manual (custom allocation)
+  - Multi-month payment UI
+  - Alokasi kelebihan ke bulan berikutnya
+  - Hibah dari kelebihan
+  - Edit/cancel pembayaran langsung
+  - Integrasi dengan rekap bulanan dan PDF
+
 ---
 
 ## Pekerjaan Belum Selesai
 
 | Item | Status | Keterangan |
 |------|--------|------------|
+| Jalankan SQL 95 di Supabase | Pending | Sistem pembayaran terintegrasi + tabel baru |
 | Jalankan SQL 94 di Supabase | Pending | Edit/cancel sesi jimpitan + audit log |
 | Jalankan SQL 93 di Supabase | Pending | Backfill kategori NULL + fix trigger + buat RPC |
 | Jalankan SQL 92 di Supabase | Pending | Auto-sync warga baru ke dana khusus |
@@ -289,3 +344,6 @@
 9. **Transaksi kas dari jimpitan** di-link via `jimpitan_sesi.kas_transaction_id` → `kas_transaksi.id`, dan di-backfill ke `kas_transaksi.source_type/source_id`.
 10. **Audit log wajib** untuk setiap edit/cancel sesi — tersimpan di `jimpitan_audit_log` dengan old_data dan new_data (JSONB).
 11. **Kartu ringkasan rekap jimpitan** berfungsi sebagai filter cepat (paid/shortage/excess). Klik kartu aktif → kembali ke 'all'. Filter reset saat ganti periode.
+12. **Jimpitan adalah cicilan Iuran Bulanan**, bukan tagihan terpisah. Pembayaran dapat melalui Jimpitan (sesi) atau Langsung (form Bendahara).
+13. **Alokasi otomatis**: tunggakan paling lama → bulan berjalan → sisa jadi kredit. Hibah hanya jika dipilih warga.
+14. **Kas masuk saat uang diterima**, bukan saat alokasi. Alokasi ke bulan depan tidak membuat kas baru.
