@@ -125,9 +125,31 @@ export default function JimpitanListPage({
             </h2>
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <ManualJimpitanForm role={profile?.role ?? ''} />
-            
+
+            <Link href="/dashboard/jimpitan/rekap">
+              <Card className="overflow-hidden border-0 shadow-md ring-1 ring-purple-200 bg-gradient-to-br from-purple-50 to-violet-50 cursor-pointer hover:shadow-lg transition-shadow h-full">
+                <CardContent className="p-5">
+                  <div className="flex items-start gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-full bg-purple-500 flex items-center justify-center shrink-0">
+                      <HandCoins className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-purple-900">Rekap Jimpitan Bulanan</h3>
+                      <p className="text-xs text-purple-700 mt-0.5">
+                        Lihat status pembayaran jimpitan per warga per bulan, kelola kelebihan pembayaran
+                      </p>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" className="w-full border-purple-300 text-purple-700 hover:bg-purple-100">
+                    Buka Rekap
+                    <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                  </Button>
+                </CardContent>
+              </Card>
+            </Link>
+
             <Card className="overflow-hidden border-0 shadow-md ring-1 ring-amber-200 bg-gradient-to-br from-amber-50 to-orange-50">
               <CardContent className="p-5">
                 <div className="flex items-start gap-3 mb-4">

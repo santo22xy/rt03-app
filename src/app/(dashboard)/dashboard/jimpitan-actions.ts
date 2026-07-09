@@ -2289,3 +2289,181 @@ export async function pindahkanKelebihanKeBulanDepan(tagihanId: string): Promise
   revalidatePath('/dashboard/iuran')
   return { success: true }
 }
+
+// =====================================================
+// REKAP JIMPITAN BULANAN
+// =====================================================
+
+export type RekapRow = {
+  profile_id: string
+  nama_kk: string
+  blok: string
+  nomor_rumah: string | number
+  target_bulanan: number
+  kredit_dari_lalu: number
+  kewajiban_efektif: number
+  total_bayar: number
+  selisih: number
+  status: string
+  kelebihan_tujuan: string | null
+  kelebihan_catatan: string | null
+}
+
+export async function getJimpitanRecap(periode: string): Promise<{ data?: RekapRow[]; error?: string }> {
+  const profile = await getCurrentUser()
+  if (!profile || !isPengurus(profile)) return { error: 'Akses ditolak' }
+
+  const supabase = createAdminClient()
+
+  // Coba pakai RPC dulu, fallback ke query manual jika RPC belum ada
+  const { data: rpcData, error: rpcErr } = await supabase.rpc('get_jimpitan_recap', {
+    p_periode: periode,
+  })
+
+  if (!rpcErr && rpcData) {
+    return { data: rpcData as RekapRow[] }
+  }
+
+  // Fallback: query manual (jika RPC belum di-deploy)
+  const { data: warga } = await supabase
+    .from('profiles')
+    .select('id, nama_kk, blok, nomor_rumah')
+    .eq('is_active', true)
+    .not('blok', 'is', null)
+    .not('nomor_rumah', 'is', null)
+    .neq('blok', 'X')
+    .order('blok', { ascending: true })
+    .order('nomor_rumah', { ascending: true })
+
+  const { data: tagihan } = await supabase
+    .from('jimpitan_tagihan')
+    .select('profile_id, nominal_tagihan, total_terbayar, status, kelebihan, kelebihan_tujuan, kelebihan_catatan')
+    .eq('periode_bulan', periode)
+
+  const { data: kreditData } = await supabase
+    .from('jimpitan_excess_allocations')
+    .select('profile_id, excess_amount')
+    .eq('dest_month', periode)
+    .eq('allocation_type', 'carry_forward')
+    .is('cancelled_at', null)
+
+  const tagihanMap = new Map((tagihan ?? []).map(t => [t.profile_id, t]))
+  const kreditMap = new Map<string, number>()
+  for (const k of kreditData ?? []) {
+    kreditMap.set(k.profile_id, (kreditMap.get(k.profile_id) ?? 0) + Number(k.excess_amount))
+  }
+
+  const rows: RekapRow[] = (warga ?? []).map(w => {
+    const t = tagihanMap.get(w.id)
+    const kredit = kreditMap.get(w.id) ?? 0
+    const target = Number(t?.nominal_tagihan ?? 0)
+    const kewajiban = Math.max(target - kredit, 0)
+    const bayar = Number(t?.total_terbayar ?? 0)
+    const selisih = bayar - kewajiban
+    let status = t?.status ?? 'BELUM'
+    // Override status berdasarkan hitungan aktual
+    if (bayar === 0 && kewajiban > 0) status = 'BELUM'
+    else if (bayar > 0 && bayar < kewajiban) status = 'CICIL'
+    else if (bayar >= kewajiban && kredit >= target) status = 'LUNAS' // kredit menutup semua
+    else if (bayar === kewajiban && bayar > 0) status = 'LUNAS'
+    else if (bayar > kewajiban && !t?.kelebihan_tujuan) status = 'LEBIH'
+    else if (t?.kelebihan_tujuan === 'BULAN_DEPAN') status = 'DIBAWA'
+    else if (t?.kelebihan_tujuan === 'HIBAH') status = 'HIBAH'
+    else if (bayar >= kewajiban) status = 'LUNAS'
+
+    return {
+      profile_id: w.id,
+      nama_kk: w.nama_kk,
+      blok: w.blok,
+      nomor_rumah: w.nomor_rumah,
+      target_bulanan: target,
+      kredit_dari_lalu: kredit,
+      kewajiban_efektif: kewajiban,
+      total_bayar: bayar,
+      selisih,
+      status,
+      kelebihan_tujuan: t?.kelebihan_tujuan ?? null,
+      kelebihan_catatan: t?.kelebihan_catatan ?? null,
+    }
+  })
+
+  return { data: rows }
+}
+
+// =====================================================
+// ALOKASI KEBLEBIHAN PEMBAYARAN
+// =====================================================
+
+export async function allocateExcess(
+  tagihanId: string,
+  profileId: string,
+  sourceMonth: string,
+  excessAmount: number,
+  allocationType: 'carry_forward' | 'donation',
+  destMonth?: string,
+  notes?: string
+): Promise<{ error?: string; success?: boolean }> {
+  const profile = await getCurrentUser()
+  if (!profile || !isPengurus(profile)) return { error: 'Akses ditolak' }
+
+  const supabase = createAdminClient()
+
+  if (allocationType === 'carry_forward') {
+    if (!destMonth) return { error: 'Bulan tujuan wajib diisi' }
+    const { data, error } = await supabase.rpc('allocate_excess_carry_forward', {
+      p_tagihan_id: tagihanId,
+      p_profile_id: profileId,
+      p_source_month: sourceMonth,
+      p_excess_amount: excessAmount,
+      p_dest_month: destMonth,
+      p_created_by: profile.id,
+      p_notes: notes ?? null,
+    })
+    if (error) return { error: error.message }
+    if (data?.error) return { error: data.error }
+  } else {
+    const { data, error } = await supabase.rpc('allocate_excess_donation', {
+      p_tagihan_id: tagihanId,
+      p_profile_id: profileId,
+      p_source_month: sourceMonth,
+      p_excess_amount: excessAmount,
+      p_created_by: profile.id,
+      p_notes: notes ?? null,
+    })
+    if (error) return { error: error.message }
+    if (data?.error) return { error: data.error }
+  }
+
+  revalidatePath('/dashboard/jimpitan/rekap')
+  revalidatePath('/dashboard/iuran')
+  return { success: true }
+}
+
+// =====================================================
+// SALDO AWAL PEMBUKUAN KAS
+// =====================================================
+
+export async function setCashOpeningBalance(
+  effectiveDate: string,
+  amount: number,
+  notes?: string
+): Promise<{ error?: string; success?: boolean }> {
+  const profile = await getCurrentUser()
+  if (!profile || !isPengurus(profile)) return { error: 'Akses ditolak' }
+
+  const supabase = createAdminClient()
+  const { error } = await supabase
+    .from('cash_opening_balances')
+    .upsert({
+      effective_date: effectiveDate,
+      amount,
+      notes: notes ?? null,
+      created_by: profile.id,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'effective_date' })
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/dashboard/kas')
+  return { success: true }
+}

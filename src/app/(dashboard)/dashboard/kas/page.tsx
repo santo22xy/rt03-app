@@ -80,18 +80,39 @@ export default async function KasPage({
   if (filter === 'masuk') trxList = trxList.filter(t => t.tipe === 'MASUK')
   if (filter === 'keluar') trxList = trxList.filter(t => t.tipe === 'KELUAR')
 
-  // Saldo dihitung independent dari filter (full ledger)
-  const { data: allTrxForSaldo } = await supabase
-    .from('kas_transaksi')
-    .select('tipe, nominal')
+  // Hitung saldo awal bulan ini = saldo akhir bulan sebelumnya
+  // Rumus: opening_balance + semua transaksi sebelum bulan ini
+  const [cy, cm] = currentMonth.split('-').map(Number)
+  const firstDayOfMonth = `${cy}-${String(cm).padStart(2, '0')}-01`
 
-  const totalMasuk = (allTrxForSaldo ?? [])
+  // Ambil saldo awal pembukuan (jika ada)
+  const { data: openingBalances } = await supabase
+    .from('cash_opening_balances')
+    .select('effective_date, amount')
+    .lte('effective_date', firstDayOfMonth)
+    .order('effective_date', { ascending: false })
+    .limit(1)
+
+  const openingBalance = Number(openingBalances?.[0]?.amount ?? 0)
+  const openingDate = openingBalances?.[0]?.effective_date ?? firstDayOfMonth
+
+  // Hitung semua transaksi dari tanggal saldo awal hingga akhir bulan sebelumnya
+  const prevMonthLastDay = new Date(cy, cm - 1, 0) // hari terakhir bulan sebelumnya
+  const prevEnd = `${prevMonthLastDay.getFullYear()}-${String(prevMonthLastDay.getMonth() + 1).padStart(2, '0')}-${String(prevMonthLastDay.getDate()).padStart(2, '0')}`
+
+  const trxBeforeMonth = allTrx.filter(t => t.tanggal >= openingDate && t.tanggal <= prevEnd)
+  const masukBefore = trxBeforeMonth.filter(t => t.tipe === 'MASUK').reduce((s, t) => s + Number(t.nominal), 0)
+  const keluarBefore = trxBeforeMonth.filter(t => t.tipe === 'KELUAR').reduce((s, t) => s + Number(t.nominal), 0)
+  const saldoAwalBulan = openingBalance + masukBefore - keluarBefore
+
+  // Saldo dihitung independent dari filter (full ledger)
+  const totalMasuk = allTrx
     .filter((t) => t.tipe === 'MASUK')
     .reduce((s, t) => s + Number(t.nominal), 0)
-  const totalKeluar = (allTrxForSaldo ?? [])
+  const totalKeluar = allTrx
     .filter((t) => t.tipe === 'KELUAR')
     .reduce((s, t) => s + Number(t.nominal), 0)
-  const saldo = totalMasuk - totalKeluar
+  const saldo = openingBalance + masukBefore + totalMasuk - keluarBefore - totalKeluar
 
   // Sesi jimpitan yang perlu ACC
   const { data: sesiPending } = await supabase
@@ -241,7 +262,7 @@ export default async function KasPage({
             {(() => {
               // Sort tanggal ASC (terlama → terbaru) untuk hitung saldo awal per hari
               const sortedDates = Object.keys(grouped).sort()
-              let runningSaldo = 0
+              let runningSaldo = saldoAwalBulan // saldo awal bulan = saldo akhir bulan sebelumnya
               return sortedDates.map((tanggal) => {
                 const items = grouped[tanggal]
                 const dayMasuk = items
