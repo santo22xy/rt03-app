@@ -6,6 +6,7 @@ import { Wallet, CheckCircle2, Clock, AlertCircle, TrendingUp, Users, Sparkles, 
 import { formatRupiah, getMonthName } from '@/lib/format'
 import Link from 'next/link'
 import { KelebihanManager } from './kelebihan-manager'
+import { SyncKategoriButton } from './sync-kategori-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,7 +46,7 @@ export default async function IuranPage({
 
   const { data: profiles } = await supabase
     .from('profiles')
-    .select('id, nama_kk, blok, nomor_rumah, login_id')
+    .select('id, nama_kk, blok, nomor_rumah, login_id, kategori_tarif')
     .eq('is_active', true)
     .order('blok', { ascending: true })
     .order('nomor_rumah', { ascending: true })
@@ -53,15 +54,24 @@ export default async function IuranPage({
   const totalTagihan = tagihan?.reduce((s, t) => s + Number(t.nominal_tagihan), 0) ?? 0
   const totalTerbayar = tagihan?.reduce((s, t) => s + Number(t.total_terbayar), 0) ?? 0
 
-  // Group by kategori
-  const normalTariff = tagihan?.filter((t) => t.kategori === 'NORMAL') ?? []
+  // Group by kategori - gunakan fallback dari profiles.kategori_tarif jika tagihan.kategori NULL
+  const getResolvedKategori = (t: { kategori?: string | null; profile_id: string }) => {
+    // Prioritas 1: kategori dari jimpitan_tagihan (jika sudah diisi)
+    if (t.kategori === 'NORMAL' || t.kategori === 'PERLU_KONFIRMASI') return t.kategori
+    // Prioritas 2: fallback dari profiles.kategori_tarif
+    const prof = profileMap.get(t.profile_id)
+    const kategoriTarif = (prof?.kategori_tarif ?? 'NORMAL').toUpperCase()
+    return kategoriTarif === 'KHUSUS' ? 'PERLU_KONFIRMASI' : 'NORMAL'
+  }
+
+  const normalTariff = tagihan?.filter((t) => getResolvedKategori(t) === 'NORMAL') ?? []
   const normalCount = normalTariff.length
   const normalLunas = normalTariff.filter((t) => {
     const nominal = Number(t.total_terbayar)
     const tagihanVal = Number(t.nominal_tagihan)
     return nominal >= tagihanVal && nominal > 0
   }).length
-  const konfirmasiTariff = tagihan?.filter((t) => t.kategori === 'PERLU_KONFIRMASI') ?? []
+  const konfirmasiTariff = tagihan?.filter((t) => getResolvedKategori(t) === 'PERLU_KONFIRMASI') ?? []
   const konfirmasiCount = konfirmasiTariff.length
   const konfirmasiLunas = konfirmasiTariff.filter((t) => {
     const nominal = Number(t.total_terbayar)
@@ -83,7 +93,7 @@ export default async function IuranPage({
       } else {
         realStatus = 'BELUM'
       }
-      return { ...t, profile: profileMap.get(t.profile_id), realStatus }
+      return { ...t, profile: profileMap.get(t.profile_id), realStatus, resolvedKategori: getResolvedKategori(t) }
     })
     .sort((a, b) => {
       const ba = a.profile?.blok ?? 'Z'
@@ -125,6 +135,7 @@ export default async function IuranPage({
           </Link>
         </div>
         <div className="flex gap-2 shrink-0">
+          <SyncKategoriButton periode={`${_yyyy}-${_mm}`} />
           {isCurrentMonth && (
             <Link
               href="/dashboard/iuran/bulk-input"
@@ -182,7 +193,7 @@ export default async function IuranPage({
         <Card className="border-0 shadow-md ring-1 ring-slate-200/60 overflow-hidden">
           <div className="bg-gradient-to-r from-slate-50 to-white px-4 py-2.5 border-b border-slate-100">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-600">
-              Kategori NORMAL
+              Kategori Normal
             </p>
           </div>
           <CardContent className="p-4 flex items-center gap-3">
@@ -253,11 +264,11 @@ export default async function IuranPage({
                     <td className="px-4 py-3 font-semibold">{t.profile?.nama_kk ?? '-'}</td>
                     <td className="px-4 py-3">
                       <Badge className={
-                        t.kategori === 'NORMAL'
+                        t.resolvedKategori === 'NORMAL'
                           ? 'bg-slate-100 text-slate-700 text-[9px]'
                           : 'bg-amber-100 text-amber-700 text-[9px]'
                       }>
-                        {t.kategori === 'NORMAL' ? 'Normal' : 'Khusus'}
+                        {t.resolvedKategori === 'NORMAL' ? 'Normal' : 'Khusus'}
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-xs">

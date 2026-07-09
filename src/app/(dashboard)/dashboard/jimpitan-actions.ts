@@ -1161,12 +1161,15 @@ export async function accSesi(sesiId: string) {
       // Buat tagihan baru jika belum ada (dapatkan nominal tagihan default dari profile)
       const { data: profilePembayar } = await admin
         .from('profiles')
-        .select('kategori_tarif')
+        .select('kategori_tarif, nama_kk, login_id')
         .eq('id', detail.profile_id)
         .maybeSingle()
 
-      const tarifDefault: Record<string, number> = { STANDAR: 3000, KURANG: 2000, ISTIMEWA: 5000 }
-      const nominalTagihan = tarifDefault[profilePembayar?.kategori_tarif ?? 'STANDAR'] ?? 3000
+      // Tarif berdasarkan kategori_tarif di master warga (profiles)
+      const tarifNormal = 15000
+      const tarifKhusus = 10000
+      const kategoriTarif = (profilePembayar?.kategori_tarif ?? 'NORMAL').toUpperCase()
+      const nominalTagihan = kategoriTarif === 'KHUSUS' ? tarifKhusus : tarifNormal
 
       let newStatus = 'CICIL'
       if (Number(detail.nominal) >= nominalTagihan) {
@@ -1179,10 +1182,13 @@ export async function accSesi(sesiId: string) {
         .from('jimpitan_tagihan')
         .insert({
           profile_id: detail.profile_id,
+          login_id: profilePembayar?.login_id ?? '',
+          nama_kk_snapshot: profilePembayar?.nama_kk ?? '',
           periode_bulan: periodeBulan,
           nominal_tagihan: nominalTagihan,
           total_terbayar: Number(detail.nominal),
           status: newStatus,
+          kategori: kategoriTarif === 'KHUSUS' ? 'PERLU_KONFIRMASI' : 'NORMAL',
           kelebihan: kelebihan
         })
     }
@@ -2270,12 +2276,15 @@ export async function pindahkanKelebihanKeBulanDepan(tagihanId: string): Promise
   // 3. Ambil profil untuk tarif default
   const { data: profil, error: errProfil } = await admin
     .from('profiles')
-    .select('kategori_tarif')
+    .select('kategori_tarif, nama_kk, login_id')
     .eq('id', tagihanSekarang.profile_id)
     .single()
 
-  const tarifDefault: Record<string, number> = { STANDAR: 15000, KURANG: 10000, ISTIMEWA: 20000 }
-  const nominalTagihanDefault = tarifDefault[profil?.kategori_tarif ?? 'STANDAR'] ?? 15000
+  // Tarif berdasarkan kategori_tarif di master warga (profiles)
+  const tarifNormal = 15000
+  const tarifKhusus = 10000
+  const kategoriTarif = (profil?.kategori_tarif ?? 'NORMAL').toUpperCase()
+  const nominalTagihanDefault = kategoriTarif === 'KHUSUS' ? tarifKhusus : tarifNormal
 
   // 4. Ambil atau buat tagihan bulan depan
   const { data: tagihanDepan, error: errTagihanDepan } = await admin
@@ -2331,10 +2340,13 @@ export async function pindahkanKelebihanKeBulanDepan(tagihanId: string): Promise
       .from('jimpitan_tagihan')
       .insert({
         profile_id: tagihanSekarang.profile_id,
+        login_id: profil?.login_id ?? '',
+        nama_kk_snapshot: profil?.nama_kk ?? '',
         periode_bulan: periodeBulanDepan,
         nominal_tagihan: nominalTagihanDefault,
         total_terbayar: newTotalTerbayarDepan,
         status: newStatusDepan,
+        kategori: kategoriTarif === 'KHUSUS' ? 'PERLU_KONFIRMASI' : 'NORMAL',
         kelebihan: Math.max(0, newTotalTerbayarDepan - nominalTagihanDefault),
       })
 

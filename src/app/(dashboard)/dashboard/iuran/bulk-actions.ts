@@ -216,18 +216,15 @@ export async function getWargaWithTagihan(periodeYYYYMM: string): Promise<{
 
   const tagihanMap = new Map((tagihanList ?? []).map(t => [t.profile_id, t]))
 
-  // Get nominal default per kategori tarif
-  const tarifDefault: Record<string, number> = {
-    STANDAR: 3000,
-    KURANG: 2000,
-    ISTIMEWA: 5000,
-  }
+  // Get nominal default per kategori tarif (dari master warga profiles)
+  const tarifNormal = 15000
+  const tarifKhusus = 10000
 
   return {
     data: (profiles ?? []).map(p => {
       const t = tagihanMap.get(p.id)
-      const kategori = p.kategori_tarif ?? 'STANDAR'
-      const nominalTagihan = t?.nominal_tagihan ?? tarifDefault[kategori] ?? 3000
+      const kategoriTarif = (p.kategori_tarif ?? 'NORMAL').toUpperCase()
+      const nominalTagihan = t?.nominal_tagihan ?? (kategoriTarif === 'KHUSUS' ? tarifKhusus : tarifNormal)
       const totalTerbayar = t?.total_terbayar ?? 0
       const sisa = nominalTagihan - totalTerbayar
       let status: 'BELUM' | 'CICIL' | 'LUNAS' | 'LEBIH' = 'BELUM'
@@ -246,8 +243,44 @@ export async function getWargaWithTagihan(periodeYYYYMM: string): Promise<{
         total_terbayar: totalTerbayar,
         sisa: sisa,
         status: status,
-        kategori_tarif: kategori,
+        kategori_tarif: kategoriTarif,
       }
     }),
+  }
+}
+
+/**
+ * Sinkronisasi kategori warga dari master (profiles.kategori_tarif)
+ * ke jimpitan_tagihan.kategori untuk periode tertentu atau semua periode.
+ *
+ * Tidak mengubah: nominal_tagihan, total_terbayar, status, pembayaran.
+ */
+export async function syncKategoriWarga(periodeYYYYMM?: string): Promise<{
+  success?: boolean
+  updated?: number
+  error?: string
+}> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Tidak terautentikasi' }
+
+  const admin = createAdminClient()
+
+  if (periodeYYYYMM) {
+    const periode = `${periodeYYYYMM}-01`
+    const { data, error } = await admin.rpc('sync_kategori_warga', {
+      p_periode: periode,
+    })
+    if (error) return { error: error.message }
+    if (data?.error) return { error: data.error }
+    revalidatePath('/dashboard/iuran')
+    revalidatePath(`/dashboard/iuran?bulan=${periodeYYYYMM.slice(0, 7)}`)
+    return { success: true, updated: data?.updated ?? 0 }
+  } else {
+    const { data, error } = await admin.rpc('sync_all_kategori_warga')
+    if (error) return { error: error.message }
+    if (data?.error) return { error: data.error }
+    revalidatePath('/dashboard/iuran')
+    return { success: true, updated: data?.updated ?? 0 }
   }
 }
