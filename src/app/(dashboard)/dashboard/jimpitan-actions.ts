@@ -110,12 +110,30 @@ export async function getJimpitanListData(month: number, year: number) {
     .lte('tanggal', endDate)
     .order('tanggal', { ascending: false })
     .limit(50)
-  
+
+  // Untuk sesi yang summary-nya masih 0 (misal input manual lama),
+  // hitung ringkasan dari embedded jimpitan_detail agar panel validasi akurat
+  const sesiWithSummary = (sesi ?? []).map((s) => {
+    const detailArr = (s as any).jimpitan_detail as { nominal: number; is_bayar: boolean }[] | undefined
+    if (detailArr && detailArr.length > 0 && (Number(s.total_nominal) === 0 || (s.jumlah_warga_bayar ?? 0) === 0)) {
+      const paid = detailArr.filter((d) => d.is_bayar)
+      const calcTotal = paid.reduce((sum, d) => sum + Number(d.nominal || 0), 0)
+      const calcBayar = paid.length
+      return {
+        ...s,
+        total_nominal: Number(s.total_nominal) > 0 ? s.total_nominal : calcTotal,
+        total_pendapatan: Number(s.total_pendapatan) > 0 ? s.total_pendapatan : calcTotal,
+        jumlah_warga_bayar: (s.jumlah_warga_bayar ?? 0) > 0 ? s.jumlah_warga_bayar : calcBayar,
+      }
+    }
+    return s
+  })
+
   return {
     profile,
     isPengurus,
     isWindowOpen,
-    sesi: sesi || []
+    sesi: sesiWithSummary
   }
 }
 
@@ -1321,6 +1339,23 @@ export async function pengurusInputJimpitanManual(formData: FormData): Promise<{
     await admin.from('jimpitan_sesi').delete().eq('id', sesiId)
     return { error: `Gagal memasukkan detail: ${detailErr.message}` }
   }
+
+  // Hitung ringkasan dari detail yang baru di-insert agar summary langsung akurat
+  // (tidak menunggu ACC untuk mengisi field summary)
+  const totalNominal = detailRows
+    .filter((d) => d.is_bayar)
+    .reduce((sum, d) => sum + d.nominal, 0)
+  const jumlahBayar = detailRows.filter((d) => d.is_bayar).length
+
+  await admin
+    .from('jimpitan_sesi')
+    .update({
+      total_nominal: totalNominal,
+      total_pendapatan: totalNominal,
+      jumlah_warga_bayar: jumlahBayar,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', sesiId)
 
   revalidatePath('/dashboard/jimpitan')
   revalidatePath('/dashboard/kas')

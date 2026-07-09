@@ -172,33 +172,46 @@ export default async function JimpitanDetailPage({
         </Badge>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-2">
-        <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
-          <CardContent className="p-3 text-center">
-            <p className="text-[9px] font-bold uppercase text-muted-foreground">Total</p>
-            <p className="text-base font-bold text-emerald-600 mt-0.5 truncate">
-              {formatRupiah(sesi.total_nominal)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
-          <CardContent className="p-3 text-center">
-            <p className="text-[9px] font-bold uppercase text-muted-foreground">Bayar</p>
-            <p className="text-base font-bold text-blue-600 mt-0.5">
-              {sesi.jumlah_warga_bayar}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
-          <CardContent className="p-3 text-center">
-            <p className="text-[9px] font-bold uppercase text-muted-foreground">Hadir</p>
-            <p className="text-base font-bold text-purple-600 mt-0.5">
-              {sesi.jumlah_penjaga_hadir}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Summary Cards — hitung dari detail aktual, bukan field sesi yang mungkin masih 0 */}
+      {(() => {
+        const detailArr = details ?? []
+        const paidDetails = detailArr.filter((d) => d.is_bayar)
+        const calcTotal = paidDetails.reduce((sum, d) => sum + Number(d.nominal || 0), 0)
+        const calcBayar = paidDetails.length
+        const calcHadir = (attendance ?? []).length
+        // Gunakan field sesi jika sudah terisi (>0), fallback ke kalkulasi detail
+        const displayTotal = Number(sesi.total_nominal) > 0 ? Number(sesi.total_nominal) : calcTotal
+        const displayBayar = (sesi.jumlah_warga_bayar ?? 0) > 0 ? sesi.jumlah_warga_bayar : calcBayar
+        const displayHadir = (sesi.jumlah_penjaga_hadir ?? 0) > 0 ? sesi.jumlah_penjaga_hadir : calcHadir
+        return (
+          <div className="grid grid-cols-3 gap-2">
+            <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
+              <CardContent className="p-3 text-center">
+                <p className="text-[9px] font-bold uppercase text-muted-foreground">Total</p>
+                <p className="text-base font-bold text-emerald-600 mt-0.5 truncate">
+                  {formatRupiah(displayTotal)}
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
+              <CardContent className="p-3 text-center">
+                <p className="text-[9px] font-bold uppercase text-muted-foreground">Bayar</p>
+                <p className="text-base font-bold text-blue-600 mt-0.5">
+                  {displayBayar}
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
+              <CardContent className="p-3 text-center">
+                <p className="text-[9px] font-bold uppercase text-muted-foreground">Hadir</p>
+                <p className="text-base font-bold text-purple-600 mt-0.5">
+                  {displayHadir}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        )
+      })()}
 
       {/* Form */}
       <JimpitanForm
