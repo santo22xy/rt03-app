@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { formatRupiah } from '@/lib/format'
 import { ArrowLeft, HeartHandshake, Users, CheckCircle2, Clock, AlertCircle, Calendar, Target } from 'lucide-react'
 import { PengaturanDanaKhusus } from '../pengaturan-dana-khusus'
+import { SyncPesertaButton } from './sync-peserta-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -71,7 +72,9 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
           <ArrowLeft className="w-4 h-4" />
           Kembali ke daftar dana khusus
         </Link>
-        <PengaturanDanaKhusus dana={{
+        <div className="flex items-center gap-2">
+          <SyncPesertaButton danaKhususId={dana.id} />
+          <PengaturanDanaKhusus dana={{
           id: dana.id,
           judul: dana.judul,
           deskripsi: dana.deskripsi,
@@ -83,6 +86,7 @@ export default async function DanaKhususDetailPage({ params }: { params: Promise
           is_wajib: dana.is_wajib,
           is_active: dana.is_active,
         }} />
+        </div>
       </div>
 
       {/* Header */}

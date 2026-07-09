@@ -482,4 +482,37 @@ export async function debugJimpitanSessions() {
   return { data }
 }
 
+/**
+ * Sinkronisasi peserta dana khusus: tambahkan warga aktif yang belum punya tagihan.
+ * Untuk satu dana khusus atau semua dana khusus aktif.
+ */
+export async function syncDanaKhususParticipants(danaKhususId?: string): Promise<{
+  success?: boolean
+  added?: number
+  error?: string
+}> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Tidak terautentikasi' }
+
+  const admin = createAdminClient()
+
+  if (danaKhususId) {
+    const { data, error } = await admin.rpc('sync_dana_khusus_participants', {
+      p_dana_khusus_id: danaKhususId,
+    })
+    if (error) return { error: error.message }
+    if (data?.error) return { error: data.error }
+    revalidatePath(`/dashboard/dana-khusus/${danaKhususId}`)
+    revalidatePath('/dashboard/dana-khusus')
+    return { success: true, added: data?.added ?? 0 }
+  } else {
+    const { data, error } = await admin.rpc('sync_all_active_dana_khusus')
+    if (error) return { error: error.message }
+    if (data?.error) return { error: data.error }
+    revalidatePath('/dashboard/dana-khusus')
+    return { success: true, added: data?.total_added ?? 0 }
+  }
+}
+
 
