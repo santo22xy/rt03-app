@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import { Button } from '@/components/ui/button'
 import { RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import { syncKategoriWarga } from '../bulk-actions'
+import { syncKategoriWarga } from './bulk-actions'
 
 export function SyncKategoriButton({ periode }: { periode?: string }) {
   const [isPending, startTransition] = useTransition()
