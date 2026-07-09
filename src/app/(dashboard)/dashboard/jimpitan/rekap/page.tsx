@@ -17,6 +17,7 @@ import { formatRupiah, getMonthName } from '@/lib/format'
 import {
   Users, Wallet, AlertCircle, CheckCircle2, TrendingUp,
   ArrowLeft, Gift, ChevronRight, Search, FileSpreadsheet, FileText,
+  X,
 } from 'lucide-react'
 import Link from 'next/link'
 import { getJimpitanRecap, allocateExcess, type RekapRow } from '../../jimpitan-actions'
@@ -38,6 +39,7 @@ export default function RekapJimpitanPage() {
   const [filterBlok, setFilterBlok] = useState('SEMUA')
   const [filterStatus, setFilterStatus] = useState('SEMUA')
   const [searchNama, setSearchNama] = useState('')
+  const [quickFilter, setQuickFilter] = useState<'all' | 'paid' | 'shortage' | 'excess'>('all')
   const [data, setData] = useState<RekapRow[]>([])
   const [loading, setLoading] = useState(false)
   const [isPending, startTransition] = useTransition()
@@ -51,6 +53,7 @@ export default function RekapJimpitanPage() {
   const periode = `${tahun}-${bulan}-01`
 
   useEffect(() => {
+    setQuickFilter('all')
     fetchData()
   }, [bulan, tahun])
 
@@ -77,6 +80,12 @@ export default function RekapJimpitanPage() {
     if (filterBlok !== 'SEMUA' && r.blok !== filterBlok) return false
     if (filterStatus !== 'SEMUA' && r.status !== filterStatus) return false
     if (searchNama && !r.nama_kk.toLowerCase().includes(searchNama.toLowerCase())) return false
+    // Quick filter dari kartu
+    const paidAmount = Number(r.total_bayar || 0)
+    const effectiveDue = Number(r.kewajiban_efektif || 0)
+    if (quickFilter === 'paid') return paidAmount > 0
+    if (quickFilter === 'shortage') return paidAmount < effectiveDue
+    if (quickFilter === 'excess') return paidAmount > effectiveDue
     return true
   })
 
@@ -136,6 +145,17 @@ export default function RekapJimpitanPage() {
     })
   }
 
+  function handleCardClick(filter: 'all' | 'paid' | 'shortage' | 'excess') {
+    setQuickFilter((current) => current === filter && filter !== 'all' ? 'all' : filter)
+  }
+
+  const quickFilterLabel: Record<string, string> = {
+    all: 'Semua warga',
+    paid: 'Sudah bayar',
+    shortage: 'Masih kurang',
+    excess: 'Kelebihan bayar',
+  }
+
   function getStatusBadge(status: string) {
     const config: Record<string, { color: string; label: string }> = {
       BELUM: { color: 'bg-red-100 text-red-700', label: 'Belum Iuran' },
@@ -169,6 +189,8 @@ export default function RekapJimpitanPage() {
           getDataForPeriod={getDataForPeriod}
           currentBulan={bulan}
           currentTahun={tahun}
+          quickFilter={quickFilter}
+          quickFilterLabel={quickFilterLabel[quickFilter]}
         />
       </div>
 
@@ -224,56 +246,60 @@ export default function RekapJimpitanPage() {
         </CardContent>
       </Card>
 
-      {/* Summary Cards */}
+      {/* Summary Cards - Interactive */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-1">
-              <Users className="w-4 h-4 text-slate-500" />
-              <p className="text-[10px] font-bold uppercase text-muted-foreground">Total Warga</p>
-            </div>
-            <p className="text-xl font-bold">{totalWarga}</p>
-            <div className="flex gap-2 mt-1 text-[10px]">
-              <span className="text-emerald-600">{lunasCount} lunas</span>
-              <span className="text-amber-600">{cicilCount} cicil</span>
-              <span className="text-red-600">{belumCount} belum</span>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-1">
-              <Wallet className="w-4 h-4 text-emerald-500" />
-              <p className="text-[10px] font-bold uppercase text-muted-foreground">Terkumpul</p>
-            </div>
-            <p className="text-lg font-bold text-emerald-600">{formatRupiah(totalDibayar)}</p>
-            <p className="text-[10px] text-muted-foreground">Target: {formatRupiah(totalTarget)}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-1">
-              <AlertCircle className="w-4 h-4 text-red-500" />
-              <p className="text-[10px] font-bold uppercase text-muted-foreground">Kekurangan</p>
-            </div>
-            <p className="text-lg font-bold text-red-600">{formatRupiah(totalKekurangan)}</p>
-            <p className="text-[10px] text-muted-foreground">{belumCount + cicilCount} warga</p>
-          </CardContent>
-        </Card>
-        <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-1">
-              <TrendingUp className="w-4 h-4 text-blue-500" />
-              <p className="text-[10px] font-bold uppercase text-muted-foreground">Kelebihan</p>
-            </div>
-            <p className="text-lg font-bold text-blue-600">{formatRupiah(totalKelebihan)}</p>
-            <div className="flex gap-2 mt-1 text-[10px]">
-              <span className="text-purple-600">{formatRupiah(totalKreditDepan)} kredit</span>
-              <span className="text-pink-600">{formatRupiah(totalHibah)} hibah</span>
-            </div>
-          </CardContent>
-        </Card>
+        {([
+          { key: 'all' as const, icon: Users, iconColor: 'text-slate-500', activeColor: 'ring-2 ring-slate-400 bg-slate-50 shadow-md', title: 'Total Warga', value: String(totalWarga), sub: `${lunasCount} lunas · ${cicilCount} cicil · ${belumCount} belum` },
+          { key: 'paid' as const, icon: Wallet, iconColor: 'text-emerald-500', activeColor: 'ring-2 ring-emerald-400 bg-emerald-50 shadow-md', title: 'Terkumpul', value: formatRupiah(totalDibayar), sub: `Target: ${formatRupiah(totalTarget)}` },
+          { key: 'shortage' as const, icon: AlertCircle, iconColor: 'text-red-500', activeColor: 'ring-2 ring-red-400 bg-red-50 shadow-md', title: 'Kekurangan', value: formatRupiah(totalKekurangan), sub: `${belumCount + cicilCount} warga` },
+          { key: 'excess' as const, icon: TrendingUp, iconColor: 'text-blue-500', activeColor: 'ring-2 ring-blue-400 bg-blue-50 shadow-md', title: 'Kelebihan', value: formatRupiah(totalKelebihan), sub: `${formatRupiah(totalKreditDepan)} kredit · ${formatRupiah(totalHibah)} hibah` },
+        ]).map(({ key, icon: Icon, iconColor, activeColor, title, value, sub }) => {
+          const isActive = quickFilter === key
+          return (
+            <button
+              key={key}
+              type="button"
+              role="button"
+              tabIndex={0}
+              aria-pressed={isActive}
+              aria-label={key === 'all' ? 'Tampilkan semua warga' : key === 'paid' ? 'Tampilkan warga yang sudah membayar' : key === 'shortage' ? 'Tampilkan warga yang masih memiliki kekurangan' : 'Tampilkan warga yang memiliki kelebihan pembayaran'}
+              onClick={() => handleCardClick(key)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCardClick(key) } }}
+              className={`text-left rounded-xl border-0 shadow-sm ring-1 ring-slate-200/60 transition-all duration-150 cursor-pointer hover:shadow-md active:scale-[0.98] ${isActive ? activeColor : 'hover:ring-slate-300'}`}
+            >
+              <div className="p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <Icon className={`w-4 h-4 ${iconColor}`} />
+                  <p className="text-[10px] font-bold uppercase text-muted-foreground">{title}</p>
+                </div>
+                <p className={`text-xl font-bold ${key === 'paid' ? 'text-emerald-600' : key === 'shortage' ? 'text-red-600' : key === 'excess' ? 'text-blue-600' : ''}`}>{value}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{sub}</p>
+                {isActive && key !== 'all' && (
+                  <div className="flex items-center gap-1 mt-1.5">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+                    <span className="text-[9px] font-semibold">Filter aktif: {quickFilterLabel[key]}</span>
+                  </div>
+                )}
+              </div>
+            </button>
+          )
+        })}
       </div>
+
+      {/* Active filter chip */}
+      {quickFilter !== 'all' && (
+        <div className="flex items-center gap-2">
+          <Badge className="bg-slate-800 text-white hover:bg-slate-700 text-[10px] flex items-center gap-1">
+            {quickFilterLabel[quickFilter]}
+            <button type="button" onClick={() => setQuickFilter('all')} className="ml-1 hover:text-slate-300" aria-label="Hapus filter">
+              <X className="w-3 h-3" />
+            </button>
+          </Badge>
+          <span className="text-[10px] text-muted-foreground">
+            Menampilkan {filtered.length} dari {data.length} warga
+          </span>
+        </div>
+      )}
 
       {/* Tabel Rekap */}
       {loading ? (
@@ -289,7 +315,22 @@ export default function RekapJimpitanPage() {
         <Card className="border-0 shadow-sm ring-1 ring-slate-200/60">
           <CardContent className="p-10 text-center">
             <p className="text-sm font-semibold text-slate-700">Tidak ada data</p>
-            <p className="text-[11px] text-muted-foreground mt-1">Belum ada tagihan jimpitan untuk periode ini</p>
+            <p className="text-[11px] text-muted-foreground mt-1">
+              {quickFilter === 'paid'
+                ? 'Belum ada warga yang melakukan pembayaran pada periode ini.'
+                : quickFilter === 'shortage'
+                ? 'Tidak ada warga yang memiliki kekurangan pembayaran.'
+                : quickFilter === 'excess'
+                ? 'Tidak ada warga yang memiliki kelebihan pembayaran.'
+                : searchNama
+                ? 'Tidak ditemukan warga yang sesuai dengan filter.'
+                : 'Belum ada tagihan jimpitan untuk periode ini'}
+            </p>
+            {quickFilter !== 'all' && (
+              <Button variant="outline" size="sm" className="mt-3 text-xs" onClick={() => setQuickFilter('all')}>
+                Tampilkan Semua Warga
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (

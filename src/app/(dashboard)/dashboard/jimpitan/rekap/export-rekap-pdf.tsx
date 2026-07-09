@@ -32,12 +32,16 @@ interface ExportRekapJimpitanPDFProps {
   getDataForPeriod: (periode: string) => Promise<RekapRow[]>
   currentBulan: string
   currentTahun: string
+  quickFilter?: 'all' | 'paid' | 'shortage' | 'excess'
+  quickFilterLabel?: string
 }
 
 export function ExportRekapJimpitanPDF({
   getDataForPeriod,
   currentBulan,
   currentTahun,
+  quickFilter = 'all',
+  quickFilterLabel,
 }: ExportRekapJimpitanPDFProps) {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<Mode>('single')
@@ -142,7 +146,17 @@ export function ExportRekapJimpitanPDF({
         }) + ' ' + now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
 
         for (let di = 0; di < allData.length; di++) {
-          const { periode, rows } = allData[di]
+          const { periode, rows: rawRows } = allData[di]
+          // Apply quick filter if active
+          const rows = rawRows.filter((r) => {
+            if (quickFilter === 'all') return true
+            const paid = Number(r.total_bayar || 0)
+            const due = Number(r.kewajiban_efektif || 0)
+            if (quickFilter === 'paid') return paid > 0
+            if (quickFilter === 'shortage') return paid < due
+            if (quickFilter === 'excess') return paid > due
+            return true
+          })
           const [tahun, bulan] = periode.split('-')
           const bulanLabel = BULAN_LABEL_MAP[bulan] ?? bulan
 
@@ -158,9 +172,16 @@ export function ExportRekapJimpitanPDF({
           doc.setFontSize(8)
           doc.setTextColor(120, 120, 120)
           doc.text(`Dicetak: ${dicetakStr}`, pageW / 2, 25, { align: 'center' })
+          let headerEndY = 25
+          if (quickFilter !== 'all' && quickFilterLabel) {
+            doc.setFont('helvetica', 'bold')
+            doc.setTextColor(50, 50, 50)
+            doc.text(`Filter: ${quickFilterLabel}`, pageW / 2, 30, { align: 'center' })
+            headerEndY = 30
+          }
           doc.setTextColor(0, 0, 0)
           doc.setLineWidth(0.3)
-          doc.line(14, 28, pageW - 14, 28)
+          doc.line(14, headerEndY + 3, pageW - 14, headerEndY + 3)
 
           // === RINGKASAN ===
           const totalWarga = rows.length
