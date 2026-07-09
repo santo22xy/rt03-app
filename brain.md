@@ -77,6 +77,10 @@
 | `resync_dana_khusus_tagihan(UUID, INT, INT)` | id, target_normal, target_khusus | Resync nominal dana khusus |
 | `sync_dana_khusus_participants(UUID)` | dana_khusus_id | Tambah warga aktif yang belum terdaftar |
 | `sync_all_active_dana_khusus()` | - | Sync semua dana khusus aktif |
+| `edit_jimpitan_submitted(...)` | sesi_id, changed_by, reason, details, attendance | Edit sesi submitted (atomik) |
+| `cancel_jimpitan_submitted(...)` | sesi_id, cancelled_by, reason | Batalkan sesi belum masuk kas |
+| `edit_jimpitan_approved(...)` | sesi_id, changed_by, reason, details, attendance | Edit sesi approved + update kas |
+| `cancel_jimpitan_approved(...)` | sesi_id, cancelled_by, reason | Batalkan sesi approved + void kas + reversal |
 
 ---
 
@@ -93,8 +97,12 @@
 ### Jimpitan
 - **File utama**: `src/app/(dashboard)/dashboard/jimpitan/page.tsx`
 - **Server actions**: `src/app/(dashboard)/dashboard/jimpitan-actions.ts`
+- **Form**: `src/app/(dashboard)/dashboard/jimpitan/[id]/jimpitan-form.tsx`
 - ACC sesi (`accSesi`) membuat tagihan jika belum ada → WAJIB isi kategori dari profiles
 - Pindah kelebihan (`pindahkanKelebihanKeBulanDepan`) juga membuat tagihan → WAJIB isi kategori
+- **Edit sesi**: Bendahara bisa edit SUBMITTED dan APPROVED via RPC atomik
+- **Batalkan sesi**: Bendahara bisa batalkan SUBMITTED dan APPROVED (soft delete + void kas + reversal)
+- **Audit log**: Semua edit/cancel tercatat di `jimpitan_audit_log`
 - Rekap: `src/app/(dashboard)/dashboard/jimpitan/rekap/page.tsx`
 
 ### Dana Khusus
@@ -184,16 +192,65 @@
 - **Status**: Selesai
 - **Catatan lanjutan**: User perlu jalankan SQL 93 untuk backfill data Juli dan fix trigger
 
+### [2026-07-09 16:30 WIB] Fitur Edit & Batalkan Sesi Jimpitan (Submitted + Approved)
+- **Permintaan**: Bendahara dapat mengedit dan membatalkan sesi submitted dan approved
+- **Aturan akses**:
+  - BENDAHARA/KETUA_RT/SUPERADMIN: bisa edit & batalkan SUBMITTED dan APPROVED
+  - Role lain: tidak bisa edit/batalkan APPROVED
+  - Validasi di backend via RPC (SECURITY DEFINER), bukan hanya UI
+- **Perubahan yang dilakukan**:
+  1. `sql/94-edit-cancel-jimpitan-sesi.sql`:
+     - Kolom baru: `jimpitan_sesi.revised_at/revised_by/revision_reason/revision_count`
+     - Kolom baru: `kas_transaksi.source_type/source_id/voided/voided_at/voided_by/void_reason/reversal_of`
+     - Tabel baru: `jimpitan_audit_log` (module, session_id, action, old_data, new_data, reason, changed_by)
+     - RPC `edit_jimpitan_submitted()`: edit sesi submitted (atomik)
+     - RPC `cancel_jimpitan_submitted()`: batalkan sesi belum masuk kas
+     - RPC `edit_jimpitan_approved()`: edit sesi approved + update kas_transaksi yang sama
+     - RPC `cancel_jimpitan_approved()`: void kas_transaksi + buat reversal (KELUAR) + tandai cancelled
+     - Backfill `source_type/source_id` dari sesi yang sudah ada
+     - RLS update: bendahara boleh UPDATE sesi
+  2. `jimpitan-actions.ts`:
+     - Update `cancelJimpitanSesi()`: handle APPROVED via `cancel_jimpitan_approved` RPC, SUBMITTED via `cancel_jimpitan_submitted`
+     - Baru: `editJimpitanSesi()`: wrap RPC edit_submitted/edit_approved
+     - Baru: `getJimpitanAuditLog()`: ambil audit log sesi
+  3. `jimpitan-form.tsx`:
+     - Tambah `editMode` state untuk mode edit
+     - Tambah `canEdit` flag (SUBMITTED/APPROVED untuk bendahara)
+     - `isLocked` sekarang bisa di-override oleh `editMode`
+     - Tombol "Edit Data" + "Batalkan Sesi" + "Riwayat Perubahan"
+     - Dialog alasan edit (wajib minimal 5 karakter)
+     - Dialog audit log (menampilkan semua perubahan)
+     - Warning amber untuk sesi APPROVED
+     - Mode edit banner (blue)
+     - Update cancel dialog: warning void kas untuk APPROVED
+- **Strategi kas**:
+  - Edit approved: UPDATE nominal kas_transaksi yang sama (via `kas_transaction_id`)
+  - Cancel approved: void transaksi lama (voided=true) + buat transaksi reversal KELUAR
+- **File yang diubah**: 3 file (1 SQL baru, 2 TS modified)
+- **Tabel baru**: `jimpitan_audit_log`
+- **Kolom baru**: jimpitan_sesi (+4), kas_transaksi (+7)
+- **RPC baru**: `edit_jimpitan_submitted`, `cancel_jimpitan_submitted`, `edit_jimpitan_approved`, `cancel_jimpitan_approved`
+- **Migration**: SQL 94 wajib dijalankan di Supabase SQL Editor
+- **Hasil pengujian**: Build sukses, pushed ke GitHub (commit `bc5a495`)
+- **Status**: Selesai
+- **Risiko**:
+  - RPC `edit_jimpitan_approved` menghapus dan meng-insert ulang jimpitan_detail → perlu pastikan `jimpitan_tagihan` trigger tidak bermasalah
+  - Transaksi reversal menggunakan kategori `REVERSAL_JIMPITAN` → pastikan halaman kas menanganinya dengan benar
+  - Tidak ada mekanisme restore/pulihkan sesi cancelled (belum diimplementasikan)
+
 ---
 
 ## Pekerjaan Belum Selesai
 
 | Item | Status | Keterangan |
 |------|--------|------------|
+| Jalankan SQL 94 di Supabase | Pending | Edit/cancel sesi jimpitan + audit log |
 | Jalankan SQL 93 di Supabase | Pending | Backfill kategori NULL + fix trigger + buat RPC |
 | Jalankan SQL 92 di Supabase | Pending | Auto-sync warga baru ke dana khusus |
 | Jalankan SQL 91 di Supabase | Pending | Rekap jimpitan + saldo awal kas |
 | Jalankan SQL 89 di Supabase | Pending | nota_url, bukti_url, storage bucket |
+| Pulihkan sesi cancelled | Belum | Fitur restore belum diimplementasikan |
+| Uji end-to-end edit/cancel | Belum | Perlu uji setelah SQL 94 dijalankan |
 
 ---
 
@@ -205,3 +262,7 @@
 4. **Tidak menggunakan** STANDAR/KURANG/ISTIMEWA (legacy, sudah dihapus).
 5. **Trigger sync_pembayaran** hanya UPDATE status/total_terbayar, TIDAK mengubah kategori saat DO UPDATE.
 6. **Kategori warga baru** ditentukan dari `profiles.kategori_tarif` saat INSERT.
+7. **Edit/cancel sesi jimpitan** menggunakan RPC atomik (SECURITY DEFINER) untuk memastikan konsistensi data.
+8. **Ses APPROVED tidak boleh di-hard delete** — gunakan soft delete (status=CANCELLED) + void kas_transaksi + reversal.
+9. **Transaksi kas dari jimpitan** di-link via `jimpitan_sesi.kas_transaction_id` → `kas_transaksi.id`, dan di-backfill ke `kas_transaksi.source_type/source_id`.
+10. **Audit log wajib** untuk setiap edit/cancel sesi — tersimpan di `jimpitan_audit_log` dengan old_data dan new_data (JSONB).
