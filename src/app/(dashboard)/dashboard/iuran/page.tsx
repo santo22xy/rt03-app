@@ -7,6 +7,7 @@ import { formatRupiah, getMonthName } from '@/lib/format'
 import Link from 'next/link'
 import { KelebihanManager } from './kelebihan-manager'
 import { SyncKategoriButton } from './sync-kategori-button'
+import { DirectPaymentButton } from './direct-payment-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -136,6 +137,7 @@ export default async function IuranPage({
         </div>
         <div className="flex gap-2 shrink-0">
           <SyncKategoriButton periode={`${_yyyy}-${_mm}`} />
+          <DirectPaymentButton profiles={profiles ?? []} periode={`${_yyyy}-${_mm}-01`} />
           {isCurrentMonth && (
             <Link
               href="/dashboard/iuran/bulk-input"

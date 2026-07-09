@@ -284,3 +284,139 @@ export async function syncKategoriWarga(periodeYYYYMM?: string): Promise<{
     return { success: true, updated: data?.updated ?? 0 }
   }
 }
+
+// =====================================================
+// PEMBAYARAN LANGSUNG (Direct Payment)
+// =====================================================
+
+export interface WargaPaymentSummary {
+  profile_id: string
+  nama_kk: string
+  blok: string
+  nomor_rumah: string
+  kategori_tarif: string
+  nominal_tagihan: number
+  jimpitan_total: number
+  direct_total: number
+  credit_used: number
+  total_paid: number
+  shortage: number
+  excess: number
+  credit_balance: number
+  status: string
+  arrears: Array<{ month: string; target: number; paid: number; shortage: number }>
+}
+
+/**
+ * Ambil ringkasan pembayaran satu warga untuk periode tertentu
+ */
+export async function getWargaPaymentSummary(
+  profileId: string,
+  periode: string
+): Promise<{ data?: WargaPaymentSummary; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Tidak terautentikasi' }
+
+  const admin = createAdminClient()
+  const { data, error } = await admin.rpc('get_warga_payment_summary', {
+    p_profile_id: profileId,
+    p_periode: periode,
+  })
+  if (error) return { error: error.message }
+  if (data?.error) return { error: data.error }
+  return { data: data as unknown as WargaPaymentSummary }
+}
+
+/**
+ * Input pembayaran langsung dari warga ke Bendahara
+ * Auto-allocate: tunggakan → bulan berjalan → kredit
+ */
+export async function inputPembayaranLangsung(formData: FormData): Promise<{
+  success?: boolean
+  error?: string
+  payment_id?: string
+  total_amount?: number
+}> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Tidak terautentikasi' }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('id, role, nama_kk')
+    .eq('id', user.id)
+    .single()
+
+  if (!profile) return { error: 'Profil tidak ditemukan' }
+
+  const wargaId = formData.get('wargaId') as string
+  const tanggalBayar = formData.get('tanggalBayar') as string
+  const nominal = Number(formData.get('nominal'))
+  const metode = formData.get('metode') as string || 'TUNAI'
+  const catatan = formData.get('catatan') as string || null
+  const autoAllocate = formData.get('autoAllocate') !== 'false'
+
+  if (!wargaId) return { error: 'Pilih warga terlebih dahulu' }
+  if (!tanggalBayar) return { error: 'Tanggal pembayaran wajib diisi' }
+  if (!nominal || nominal <= 0) return { error: 'Nominal harus lebih dari 0' }
+
+  const admin = createAdminClient()
+  const { data, error } = await admin.rpc('input_direct_payment', {
+    p_profile_id: wargaId,
+    p_payment_date: tanggalBayar,
+    p_total_amount: nominal,
+    p_payment_method: metode,
+    p_created_by: user.id,
+    p_created_by_name: profile.nama_kk,
+    p_notes: catatan,
+    p_auto_allocate: autoAllocate,
+  })
+  if (error) return { error: error.message }
+  if (data?.error) return { error: data.error }
+
+  revalidatePath('/dashboard/iuran')
+  revalidatePath('/dashboard/kas')
+  revalidatePath('/dashboard')
+
+  return {
+    success: true,
+    payment_id: data?.payment_id,
+    total_amount: data?.total_amount,
+  }
+}
+
+/**
+ * Ambil ringkasan status pembayaran semua warga untuk periode tertentu
+ */
+export interface PeriodePaymentRow {
+  profile_id: string
+  nama_kk: string
+  blok: string
+  nomor_rumah: string
+  kategori_tarif: string
+  nominal_tagihan: number
+  jimpitan_total: number
+  direct_total: number
+  credit_used: number
+  total_paid: number
+  shortage: number
+  excess: number
+  credit_balance: number
+  status: string
+}
+
+export async function getPeriodePaymentStatus(
+  periode: string
+): Promise<{ data?: PeriodePaymentRow[]; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Tidak terautentikasi' }
+
+  const admin = createAdminClient()
+  const { data, error } = await admin.rpc('get_all_warga_payment_status', {
+    p_periode: `${periode}-01`,
+  })
+  if (error) return { error: error.message }
+  return { data: (data ?? []) as unknown as PeriodePaymentRow[] }
+}
