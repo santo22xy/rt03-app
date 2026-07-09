@@ -238,6 +238,28 @@
   - Transaksi reversal menggunakan kategori `REVERSAL_JIMPITAN` → pastikan halaman kas menanganinya dengan benar
   - Tidak ada mekanisme restore/pulihkan sesi cancelled (belum diimplementasikan)
 
+### [2026-07-09 18:00 WIB] Kartu Ringkasan Interaktif Rekap Jimpitan
+- **Permintaan**: Kartu ringkasan pada halaman Rekap Jimpitan Bulanan menjadi filter cepat
+- **Perubahan yang dilakukan**:
+  1. `rekap/page.tsx`:
+     - Tambah `quickFilter` state: 'all' | 'paid' | 'shortage' | 'excess'
+     - Kartu Total Warga/Terkumpul/Kekurangan/Kelebihan jadi tombol interaktif
+     - Klik kartu filter tabel: `paidAmount > 0`, `paidAmount < effectiveDue`, `paidAmount > effectiveDue`
+     - Klik kartu aktif lagi → kembali ke 'all'
+     - Chip filter aktif dengan tombol × hapus filter
+     - Tampilkan jumlah "Menampilkan X dari Y warga"
+     - Empty state kontekstual per filter
+     - Reset quickFilter saat ganti bulan/tahun
+     - Aksesibilitas: `role="button"`, `tabIndex`, `aria-pressed`, `aria-label`, handler Enter/Space
+  2. `rekap/export-rekap-pdf.tsx`:
+     - Tambah props `quickFilter` dan `quickFilterLabel`
+     - PDF export ikuti filter aktif
+     - Tambah label "Filter: ..." di header PDF jika filter aktif
+- **File yang diubah**: 2 file (`rekap/page.tsx`, `rekap/export-rekap-pdf.tsx`)
+- **Tidak mengubah**: perhitungan nominal, status pembayaran, database
+- **Hasil pengujian**: Build sukses, pushed ke GitHub (commit `45a7d13`)
+- **Status**: Selesai
+
 ---
 
 ## Pekerjaan Belum Selesai
@@ -266,3 +288,4 @@
 8. **Ses APPROVED tidak boleh di-hard delete** — gunakan soft delete (status=CANCELLED) + void kas_transaksi + reversal.
 9. **Transaksi kas dari jimpitan** di-link via `jimpitan_sesi.kas_transaction_id` → `kas_transaksi.id`, dan di-backfill ke `kas_transaksi.source_type/source_id`.
 10. **Audit log wajib** untuk setiap edit/cancel sesi — tersimpan di `jimpitan_audit_log` dengan old_data dan new_data (JSONB).
+11. **Kartu ringkasan rekap jimpitan** berfungsi sebagai filter cepat (paid/shortage/excess). Klik kartu aktif → kembali ke 'all'. Filter reset saat ganti periode.
