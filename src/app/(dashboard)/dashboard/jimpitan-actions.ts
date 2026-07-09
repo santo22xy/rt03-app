@@ -1114,11 +1114,12 @@ export async function accSesi(sesiId: string) {
   }
 
   // 4. Buat transaksi kas (Pemasukan)
-  // Check for existing transaction using source_id = sesi.id to prevent duplicates
+  // Check for existing transaction using trx_id_external to prevent duplicates
+  const trxIdExt = `JMP-${sesi.tanggal.replace(/-/g, '')}`
   const { data: existingTrx } = await admin
     .from('kas_transaksi')
     .select('id')
-    .or(`trx_id_external.eq.JMP-${sesi.tanggal.replace(/-/g, '')},source_id.eq.${sesiId}`)
+    .eq('trx_id_external', trxIdExt)
     .maybeSingle()
 
   let kasTransactionId: string | undefined
@@ -1126,8 +1127,7 @@ export async function accSesi(sesiId: string) {
     const { data: trxData, error: trxError } = await admin
       .from('kas_transaksi')
       .insert({
-        trx_id_external: `JMP-${sesi.tanggal.replace(/-/g, '')}`,
-        source_id: sesiId,
+        trx_id_external: trxIdExt,
         tanggal: sesi.tanggal,
         tipe: 'MASUK',
         kategori: 'IURAN_BULANAN',
